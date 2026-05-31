@@ -1,0 +1,13 @@
+# dependencies / build output
+node_modules
+dist
+
+# rust / tauri build artifacts
+src-tauri/target
+src-tauri/gen/schemas
+
+# os / editor
+.DS_Store
+*.dmg
+*.zip
+*.log

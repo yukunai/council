@@ -1,0 +1,829 @@
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+use std::sync::OnceLock;
+use tauri::ipc::Channel;
+
+#[derive(Deserialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+// One channel event type shared by both workers (HTTP model and local CLI), so the
+// frontend handles streaming the same way regardless of where text comes from.
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum StreamEvent {
+    Delta { text: String },
+    Video { url: String },
+    Done,
+    Error { message: String },
+}
+
+// Stream a chat completion from any OpenAI-compatible endpoint (DeepSeek today;
+// Kimi / Qwen / OpenAI / Volcengine share the same shape, only base_url + key differ).
+#[tauri::command]
+async fn chat_stream(
+    url: String,
+    api_key: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages
+            .iter()
+            .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+            .collect::<Vec<_>>(),
+        "stream": true,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = on_event.send(StreamEvent::Error { message: e.to_string() });
+            return Ok(());
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let _ = on_event.send(StreamEvent::Error {
+            message: format!("HTTP {status}: {text}"),
+        });
+        return Ok(());
+    }
+
+    // Accumulate raw bytes and split on '\n'. A full SSE "data:" line is complete
+    // before we parse it, so multi-byte UTF-8 chars never straddle a parse boundary.
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = on_event.send(StreamEvent::Error { message: e.to_string() });
+                return Ok(());
+            }
+        };
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            let line = line.trim();
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                let _ = on_event.send(StreamEvent::Done);
+                return Ok(());
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(t) = v["choices"][0]["delta"]["content"].as_str() {
+                    if !t.is_empty() {
+                        let _ = on_event.send(StreamEvent::Delta { text: t.to_string() });
+                    }
+                }
+            }
+        }
+    }
+    let _ = on_event.send(StreamEvent::Done);
+    Ok(())
+}
+
+// Strip HTML down to readable text so a page can be fed to a model for rewriting.
+// UTF-8 safe (operates on chars / str slices), so Chinese pages come through intact.
+fn html_to_text(html: &str) -> String {
+    // Cap input so a huge page can't make this expensive.
+    let mut s: String = if html.chars().count() > 500_000 {
+        html.chars().take(500_000).collect()
+    } else {
+        html.to_string()
+    };
+    // Drop non-content blocks entirely.
+    for tag in ["script", "style", "noscript", "svg", "head", "iframe"] {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        loop {
+            let lower = s.to_lowercase();
+            let Some(start) = lower.find(&open) else {
+                break;
+            };
+            match lower[start..].find(&close) {
+                Some(rel) => {
+                    let end = start + rel + close.len();
+                    s.replace_range(start..end, " ");
+                }
+                None => {
+                    s.replace_range(start.., " ");
+                    break;
+                }
+            }
+        }
+    }
+    // Strip remaining tags; emit a space where each was so words don't fuse together.
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&rsquo;", "'")
+        .replace("&ldquo;", "\"")
+        .replace("&rdquo;", "\"");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// Fetch a URL and return its readable text, for "read a link and rewrite the article".
+#[tauri::command]
+async fn fetch_url(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let text = html_to_text(&html);
+    if text.trim().is_empty() {
+        return Err("抓到页面但没解析出正文（可能是纯 JS 渲染的站点）".to_string());
+    }
+    Ok(text)
+}
+
+// Text-to-image (Volcengine Ark / Seedream shape, OpenAI-images compatible). Synchronous:
+// POST prompt, get back an image URL (or base64). No polling, unlike video.
+#[tauri::command]
+async fn image_generate(
+    endpoint: String,
+    api_key: String,
+    model: String,
+    prompt: String,
+    size: String,
+) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "response_format": "url",
+        "watermark": false,
+    });
+    if !size.trim().is_empty() {
+        body["size"] = serde_json::json!(size);
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if let Some(url) = v["data"][0]["url"].as_str() {
+        if !url.is_empty() {
+            return Ok(url.to_string());
+        }
+    }
+    if let Some(b64) = v["data"][0]["b64_json"].as_str() {
+        if !b64.is_empty() {
+            return Ok(format!("data:image/png;base64,{b64}"));
+        }
+    }
+    Err(format!("没解析出图片 url：{text}"))
+}
+
+// Submit an async video-generation task (Volcengine Ark / Seedance shape) and poll
+// until it finishes, streaming status to the frontend and finally the video URL.
+// Runs on its own current-thread tokio runtime so it doesn't depend on tauri's
+// runtime feature flags.
+#[tauri::command]
+fn video_generate(
+    endpoint: String, // create-task URL, .../api/v3/contents/generations/tasks
+    api_key: String,
+    model: String,
+    prompt: String,
+    resolution: String,
+    ratio: String,
+    duration: u32,
+    on_event: Channel<StreamEvent>,
+) {
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = on_event.send(StreamEvent::Error { message: e.to_string() });
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let client = reqwest::Client::new();
+            let base = endpoint.trim_end_matches('/').to_string();
+            let auth = format!("Bearer {api_key}");
+
+            let mut body = serde_json::json!({
+                "model": model,
+                "content": [{ "type": "text", "text": prompt }],
+            });
+            if !resolution.trim().is_empty() {
+                body["resolution"] = serde_json::json!(resolution);
+            }
+            if !ratio.trim().is_empty() {
+                body["ratio"] = serde_json::json!(ratio);
+            }
+            if duration > 0 {
+                body["duration"] = serde_json::json!(duration);
+            }
+
+            // create task
+            let resp = match client.post(&base).header("Authorization", &auth).json(&body).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = on_event.send(StreamEvent::Error { message: e.to_string() });
+                    return;
+                }
+            };
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let _ = on_event.send(StreamEvent::Error { message: format!("HTTP {status}: {text}") });
+                return;
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+            let id = v["id"].as_str().unwrap_or("").to_string();
+            if id.is_empty() {
+                let _ = on_event.send(StreamEvent::Error { message: format!("未拿到任务 id：{text}") });
+                return;
+            }
+            let _ = on_event.send(StreamEvent::Delta { text: format!("任务已提交：{id}\n排队中…\n") });
+
+            // poll up to ~12 min (240 * 3s)
+            let task_url = format!("{base}/{id}");
+            let mut last = String::new();
+            for _ in 0..240 {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let r = match client.get(&task_url).header("Authorization", &auth).send().await {
+                    Ok(r) => r,
+                    Err(_) => continue, // transient network error: keep polling
+                };
+                let t = r.text().await.unwrap_or_default();
+                let jv: serde_json::Value = serde_json::from_str(&t).unwrap_or(serde_json::json!({}));
+                let st = jv["status"].as_str().unwrap_or("").to_string();
+                match st.as_str() {
+                    "succeeded" => {
+                        let url = jv["content"]["video_url"].as_str().unwrap_or("");
+                        if url.is_empty() {
+                            let _ = on_event.send(StreamEvent::Error { message: format!("成功但没有 video_url：{t}") });
+                        } else {
+                            let _ = on_event.send(StreamEvent::Video { url: url.to_string() });
+                            let _ = on_event.send(StreamEvent::Done);
+                        }
+                        return;
+                    }
+                    "failed" | "expired" | "cancelled" => {
+                        let em = jv["error"]["message"].as_str().unwrap_or(&st);
+                        let _ = on_event.send(StreamEvent::Error { message: format!("任务 {st}：{em}") });
+                        return;
+                    }
+                    other => {
+                        // only emit when the status actually changes, to avoid spam
+                        if other != last {
+                            last = other.to_string();
+                            let label = if other.is_empty() { "处理中" } else { other };
+                            let _ = on_event.send(StreamEvent::Delta { text: format!("{label}…\n") });
+                        }
+                    }
+                }
+            }
+            let _ = on_event.send(StreamEvent::Error { message: "轮询超时（12 分钟还没生成完）".to_string() });
+        });
+    });
+}
+
+// A bundled .app launched from Finder inherits only a minimal PATH, so the user's
+// node/claude (nvm/homebrew/custom) is missing. Resolve the real PATH once from the
+// login shell. Cached for the process lifetime.
+fn full_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let from_shell = std::process::Command::new(&shell)
+            .args(["-lic", "printf '__COUNCIL__%s' \"$PATH\""])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .split("__COUNCIL__")
+                    .nth(1)
+                    .map(|p| p.trim().to_string())
+            })
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+        format!("{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:{from_shell}")
+    })
+}
+
+// Resolve a bare program name to an absolute path so it works even when the app is
+// launched from Finder (no shell PATH). CLI agents often live in ~/.local/bin.
+fn resolve_program(program: &str) -> String {
+    if program.contains('/') {
+        return program.to_string();
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs = vec![format!("{home}/.local/bin")];
+    dirs.extend(full_path().split(':').map(|s| s.to_string()));
+    for d in dirs {
+        let cand = Path::new(&d).join(program);
+        if cand.is_file() {
+            return cand.to_string_lossy().to_string();
+        }
+    }
+    program.to_string()
+}
+
+// Run a local CLI agent headless and stream its stdout. The prompt is passed as the
+// final argument (e.g. `claude -p <prompt>`, `codex exec <prompt>`), so any CLI that
+// takes a one-shot prompt works — the user configures program + fixed args.
+// Sync commands run on the main thread, so do the blocking work in a spawned thread
+// and return immediately — the Channel keeps streaming from there.
+#[tauri::command]
+fn cli_run(program: String, args: Vec<String>, prompt: String, on_event: Channel<StreamEvent>) {
+    use std::process::{Command, Stdio};
+
+    std::thread::spawn(move || {
+        let mut cmd = Command::new(resolve_program(&program));
+        for a in &args {
+            cmd.arg(a);
+        }
+        cmd.arg(&prompt);
+        let mut child = match cmd
+            .env("PATH", full_path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = on_event.send(StreamEvent::Error {
+                    message: format!("启动 {program} 失败: {e}"),
+                });
+                return;
+            }
+        };
+
+        // Drain stderr on its own thread so a chatty CLI can't fill the pipe and deadlock.
+        let stderr_handle = child.stderr.take().map(|mut e| {
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                let _ = std::io::Read::read_to_string(&mut e, &mut s);
+                s
+            })
+        });
+
+        if let Some(out) = child.stdout.take() {
+            let mut reader = BufReader::new(out);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let _ = on_event.send(StreamEvent::Delta { text: line.clone() });
+                    }
+                }
+            }
+        }
+
+        let status = child.wait();
+        let stderr = stderr_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        match status {
+            Ok(s) if s.success() => {
+                let _ = on_event.send(StreamEvent::Done);
+            }
+            _ => {
+                let msg = if stderr.trim().is_empty() {
+                    format!("{program} 退出码非 0")
+                } else {
+                    stderr
+                };
+                let _ = on_event.send(StreamEvent::Error { message: msg });
+            }
+        }
+    });
+}
+
+// ---- workflow files: saved as ~/.council/workflows/<name>.json ----
+fn workflows_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    Path::new(&home).join(".council/workflows")
+}
+
+// A workflow name becomes a filename, so reject anything that could escape the dir.
+fn safe_name(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("名字不能为空".to_string());
+    }
+    if n.contains('/') || n.contains('\\') || n.contains("..") {
+        return Err("名字不能包含 / \\ 或 ..".to_string());
+    }
+    Ok(n.to_string())
+}
+
+#[tauri::command]
+fn list_workflows() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(workflows_dir()) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("json") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    out
+}
+
+#[tauri::command]
+fn save_workflow(name: String, content: String) -> Result<String, String> {
+    let n = safe_name(&name)?;
+    let dir = workflows_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{n}.json"));
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn load_workflow(name: String) -> Result<String, String> {
+    let n = safe_name(&name)?;
+    let path = workflows_dir().join(format!("{n}.json"));
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_workflow(name: String) -> Result<(), String> {
+    let n = safe_name(&name)?;
+    let path = workflows_dir().join(format!("{n}.json"));
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+// ---- skills: SKILL.md folders under ~/.council/skills/<name>/ ----
+fn skills_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    Path::new(&home).join(".council/skills")
+}
+
+fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+    let mut name = None;
+    let mut desc = None;
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            for line in rest[..end].lines() {
+                let line = line.trim();
+                if let Some(v) = line.strip_prefix("name:") {
+                    name = Some(v.trim().trim_matches(['"', '\'']).to_string());
+                } else if let Some(v) = line.strip_prefix("description:") {
+                    desc = Some(v.trim().trim_matches(['"', '\'']).to_string());
+                }
+            }
+        }
+    }
+    (name, desc)
+}
+
+#[derive(Serialize)]
+struct SkillInfo {
+    name: String,
+    description: String,
+}
+
+#[tauri::command]
+fn list_skills() -> Vec<SkillInfo> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(skills_dir()) {
+        for e in entries.flatten() {
+            let dir = e.path();
+            let md = dir.join("SKILL.md");
+            if !md.is_file() {
+                continue;
+            }
+            let folder = dir.file_name().unwrap().to_string_lossy().to_string();
+            let (n, d) = std::fs::read_to_string(&md)
+                .map(|c| parse_frontmatter(&c))
+                .unwrap_or((None, None));
+            out.push(SkillInfo {
+                name: n.filter(|s| !s.is_empty()).unwrap_or(folder),
+                description: d.unwrap_or_default(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+#[tauri::command]
+fn read_skill(name: String) -> Result<String, String> {
+    let n = safe_name(&name)?;
+    let path = skills_dir().join(&n).join("SKILL.md");
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_skill(name: String, description: String, body: String) -> Result<(), String> {
+    let n = safe_name(&name)?;
+    let dir = skills_dir().join(&n);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Keep frontmatter one-line-safe: collapse newlines in name/description.
+    let one = |s: &str| s.replace(['\n', '\r'], " ");
+    let content = format!(
+        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        one(&n),
+        one(&description),
+        body
+    );
+    std::fs::write(dir.join("SKILL.md"), content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_skill(name: String) -> Result<(), String> {
+    let n = safe_name(&name)?;
+    std::fs::remove_dir_all(skills_dir().join(&n)).map_err(|e| e.to_string())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+// Find every folder containing a SKILL.md under `root` (a few levels deep).
+fn find_skill_dirs(root: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if !p.is_dir() {
+            continue;
+        }
+        if p.join("SKILL.md").is_file() {
+            out.push(p);
+        } else {
+            find_skill_dirs(&p, depth - 1, out);
+        }
+    }
+}
+
+fn run_git(args: &[&str], cwd: &Path) -> (bool, String) {
+    use std::io::Read;
+    // Make git fully non-interactive: a GUI app has no tty, so any credential / SSH
+    // host-key / passphrase prompt would otherwise hang forever. Null stdin + these
+    // env vars make auth FAIL FAST instead, and a hard timeout is the last backstop.
+    let mut child = match std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("PATH", full_path())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "true") // no GUI askpass
+        .env("SSH_ASKPASS", "true")
+        .env("GCM_INTERACTIVE", "never") // git-credential-manager: never pop a dialog
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new -oConnectTimeout=10",
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return (false, format!("无法运行 git：{e}（确认已安装 git）")),
+    };
+
+    // Drain stdout/stderr on threads so a full pipe buffer can't deadlock the child.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    if let Some(mut out) = child.stdout.take() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            out.read_to_string(&mut s).ok();
+            tx.send(s).ok();
+        });
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            err.read_to_string(&mut s).ok();
+            tx.send(s).ok();
+        });
+    }
+    drop(tx);
+
+    let timeout = std::time::Duration::from_secs(45);
+    let start = std::time::Instant::now();
+    let success = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return (
+                        false,
+                        "git 超时（>45 秒）已中止——多半是远程认证卡住（HTTPS 凭证或 SSH 确认）。\
+                         请确认仓库 URL 和你本机的 git 凭证 / SSH key 已配好。"
+                            .to_string(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return (false, format!("git 等待失败：{e}")),
+        }
+    };
+
+    let mut combined = String::new();
+    while let Ok(s) = rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        combined.push_str(&s);
+    }
+    (success, combined)
+}
+
+// Clone a skills repo and copy every SKILL.md folder it contains into the library.
+#[tauri::command]
+fn skills_download(url: String, on_event: Channel<StreamEvent>) {
+    std::thread::spawn(move || {
+        let tmp = std::env::temp_dir().join("council-skill-clone");
+        let _ = std::fs::remove_dir_all(&tmp);
+        on_event.send(StreamEvent::Delta { text: format!("clone {url}\n") }).ok();
+        let (ok, out) = run_git(
+            &["clone", "--depth", "1", &url, tmp.to_string_lossy().as_ref()],
+            &std::env::temp_dir(),
+        );
+        let _ = on_event.send(StreamEvent::Delta { text: out });
+        if !ok {
+            let _ = on_event.send(StreamEvent::Error { message: "克隆失败".to_string() });
+            let _ = std::fs::remove_dir_all(&tmp);
+            return;
+        }
+        let mut found = Vec::new();
+        find_skill_dirs(&tmp, 4, &mut found);
+        if found.is_empty() {
+            let _ = on_event.send(StreamEvent::Error {
+                message: "仓库里没找到任何含 SKILL.md 的文件夹".to_string(),
+            });
+            let _ = std::fs::remove_dir_all(&tmp);
+            return;
+        }
+        let lib = skills_dir();
+        let _ = std::fs::create_dir_all(&lib);
+        let mut names = Vec::new();
+        for src in &found {
+            let folder = src.file_name().unwrap().to_string_lossy().to_string();
+            if copy_dir_all(src, &lib.join(&folder)).is_ok() {
+                names.push(folder);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = on_event.send(StreamEvent::Delta {
+            text: format!("\n导入 {} 个技能：{}\n", names.len(), names.join("、")),
+        });
+        let _ = on_event.send(StreamEvent::Done);
+    });
+}
+
+// Commit the whole skill library and push it to `url` using the user's git credentials.
+#[tauri::command]
+fn skills_upload(url: String, message: String, on_event: Channel<StreamEvent>) {
+    std::thread::spawn(move || {
+        let dir = skills_dir();
+        if std::fs::create_dir_all(&dir).is_err() {
+            let _ = on_event.send(StreamEvent::Error { message: "无法创建技能库目录".to_string() });
+            return;
+        }
+        let msg = if message.trim().is_empty() { "update skills" } else { message.trim() };
+        // Push to remote `main` via HEAD:main so it works whether the local default
+        // branch is master or main, and without needing a commit before renaming.
+        let steps: Vec<Vec<&str>> = vec![
+            vec!["init"],
+            vec!["add", "-A"],
+            vec!["commit", "-m", msg],
+            vec!["remote", "remove", "origin"],
+            vec!["remote", "add", "origin", &url],
+            vec!["push", "-u", "origin", "HEAD:main"],
+        ];
+        for args in &steps {
+            let (ok, out) = run_git(args, &dir);
+            if !out.trim().is_empty() {
+                let _ = on_event.send(StreamEvent::Delta { text: format!("$ git {}\n{}\n", args.join(" "), out) });
+            }
+            if ok {
+                continue;
+            }
+            // "remote remove" fails harmlessly when there's no origin yet; "commit"
+            // fails harmlessly only when there's nothing to commit. Anything else
+            // (e.g. git identity not set, push rejected) is a real error.
+            let tolerant = matches!(args.as_slice(), ["remote", "remove", ..])
+                || (matches!(args.as_slice(), ["commit", ..])
+                    && (out.contains("nothing to commit") || out.contains("working tree clean")));
+            if !tolerant {
+                let _ = on_event.send(StreamEvent::Error {
+                    message: format!("git {} 失败", args.join(" ")),
+                });
+                return;
+            }
+        }
+        let _ = on_event.send(StreamEvent::Done);
+    });
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            chat_stream,
+            cli_run,
+            fetch_url,
+            image_generate,
+            video_generate,
+            list_workflows,
+            save_workflow,
+            load_workflow,
+            delete_workflow,
+            list_skills,
+            read_skill,
+            save_skill,
+            delete_skill,
+            skills_download,
+            skills_upload
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
