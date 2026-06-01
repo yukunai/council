@@ -16,6 +16,7 @@ import {
   sanitizeSvg,
   decodeWorker,
 } from "./utils";
+import { applyI18n, t, tf, getLang, setLang, LANGS, type Lang } from "./i18n";
 
 // Surface otherwise-silent runtime errors (incl. init-time) instead of a dead-looking UI.
 // Registered first so it catches throws during the rest of module evaluation.
@@ -1806,7 +1807,7 @@ async function refreshWorkflowList() {
   } catch {
     names = [];
   }
-  fillSelect(wfLoadEl, names.map((n) => ({ value: n, label: n })), "", { none: "载入已存…" });
+  fillSelect(wfLoadEl, names.map((n) => ({ value: n, label: n })), "", { none: t("wf.loadPh") });
 }
 
 async function saveWorkflow() {
@@ -2027,7 +2028,7 @@ function renderGeo() {
   $<HTMLInputElement>("#geo-source").value = geo.source;
   $<HTMLTextAreaElement>("#geo-route").value = geo.route;
   $<HTMLInputElement>("#geo-length").value = String(geo.length);
-  $("#geo-len-val").textContent = String(geo.length);
+  $("#geo-len-label").textContent = tf("geo.lenLabel", { n: geo.length });
   renderGeoStyles();
   renderGeoParams();
   renderGeoCards();
@@ -2599,7 +2600,7 @@ function renderRt() {
   $<HTMLTextAreaElement>("#rt-question").value = rt.question;
   $<HTMLInputElement>("#rt-role").value = rt.role;
   $<HTMLInputElement>("#rt-rounds").value = String(rt.rounds);
-  $("#rt-rounds-val").textContent = String(rt.rounds);
+  $("#rt-rounds-label").textContent = tf("rt.roundsLabel", { n: rt.rounds });
   renderRtParticipants();
   refreshRtSelectors();
 }
@@ -3926,7 +3927,7 @@ $<HTMLInputElement>("#rt-role").addEventListener("input", (e) => {
 });
 $<HTMLInputElement>("#rt-rounds").addEventListener("input", (e) => {
   rt.rounds = parseInt((e.target as HTMLInputElement).value, 10) || 2;
-  $("#rt-rounds-val").textContent = String(rt.rounds);
+  $("#rt-rounds-label").textContent = tf("rt.roundsLabel", { n: rt.rounds });
   saveRt();
 });
 $<HTMLSelectElement>("#rt-moderator").addEventListener("change", (e) => {
@@ -4080,7 +4081,7 @@ $<HTMLTextAreaElement>("#geo-route").addEventListener("input", (e) => {
 });
 $<HTMLInputElement>("#geo-length").addEventListener("input", (e) => {
   geo.length = parseInt((e.target as HTMLInputElement).value, 10) || 800;
-  $("#geo-len-val").textContent = String(geo.length);
+  $("#geo-len-label").textContent = tf("geo.lenLabel", { n: geo.length });
   saveGeo();
 });
 $<HTMLSelectElement>("#geo-worker").addEventListener("change", (e) => {
@@ -4302,6 +4303,27 @@ syncDirInput.addEventListener("change", async () => {
   await importLocalSkills(syncDirInput.files);
   syncDirInput.value = "";
 });
+
+// ---- i18n: fill the language picker, apply the current language, re-apply on change ----
+function applyLang() {
+  applyI18n();
+  // Dynamic labels carry an interpolated count, so they're rendered here rather than via data-i18n.
+  $("#geo-len-label").textContent = tf("geo.lenLabel", { n: geo.length });
+  $("#rt-rounds-label").textContent = tf("rt.roundsLabel", { n: rt.rounds });
+}
+const langSel = $<HTMLSelectElement>("#lang-select");
+for (const l of LANGS) {
+  const o = document.createElement("option");
+  o.value = l.code;
+  o.textContent = l.label;
+  langSel.appendChild(o);
+}
+langSel.value = getLang();
+langSel.addEventListener("change", () => {
+  setLang(langSel.value as Lang);
+  applyLang();
+});
+applyLang();
 
 renderSteps();
 refreshWorkflowList();

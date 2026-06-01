@@ -24,172 +24,173 @@
           </svg>
           council
         </span>
-        <span class="tagline">多模型工作流</span>
+        <span class="tagline" data-i18n="tagline">多模型工作流</span>
         <span class="seg">
-          <button id="mode-pipe" class="seg-btn active">流水线</button>
-          <button id="mode-geo" class="seg-btn">单篇</button>
-          <button id="mode-rt" class="seg-btn">圆桌</button>
-          <button id="mode-code" class="seg-btn">协作编程</button>
-          <button id="mode-term" class="seg-btn">终端</button>
+          <button id="mode-pipe" class="seg-btn active" data-i18n="mode.pipe">流水线</button>
+          <button id="mode-geo" class="seg-btn" data-i18n="mode.geo">单篇</button>
+          <button id="mode-rt" class="seg-btn" data-i18n="mode.rt">圆桌</button>
+          <button id="mode-code" class="seg-btn" data-i18n="mode.code">协作编程</button>
+          <button id="mode-term" class="seg-btn" data-i18n="mode.term">终端</button>
         </span>
-        <button id="toggle-skills">技能</button>
-        <button id="add-step">＋ 步骤</button>
-        <button id="open-market">模型市场</button>
-        <button id="open-settings">厂商 / 命令 / Key</button>
-        <button id="open-history">历史</button>
+        <button id="toggle-skills" data-i18n="nav.skills">技能</button>
+        <button id="add-step" data-i18n="nav.addStep">＋ 步骤</button>
+        <button id="open-market" data-i18n="nav.market">模型市场</button>
+        <button id="open-settings" data-i18n="nav.settings">厂商 / 命令 / Key</button>
+        <button id="open-history" data-i18n="nav.history">历史</button>
+        <select id="lang-select" class="lang-select" title="Language"></select>
         <span class="grow"></span>
-        <button id="run-btn" class="primary">▶ 运行</button>
-        <button id="stop-btn" class="hidden">■ 停止</button>
+        <button id="run-btn" class="primary" data-i18n="btn.run">▶ 运行</button>
+        <button id="stop-btn" class="hidden" data-i18n="btn.stop">■ 停止</button>
       </div>
 
       <div class="wfbar">
-        <span class="wfbar-label">工作流</span>
-        <input id="wf-name" placeholder="给这条工作流起个名" />
-        <button id="wf-save">保存</button>
-        <select id="wf-load"><option value="">载入已存…</option></select>
-        <button id="wf-new">新建空白</button>
-        <button id="wf-del" class="danger">删除</button>
+        <span class="wfbar-label" data-i18n="wf.label">工作流</span>
+        <input id="wf-name" data-i18n-ph="wf.namePh" placeholder="给这条工作流起个名" />
+        <button id="wf-save" data-i18n="wf.save">保存</button>
+        <select id="wf-load"><option value="" data-i18n="wf.loadPh">载入已存…</option></select>
+        <button id="wf-new" data-i18n="wf.new">新建空白</button>
+        <button id="wf-del" class="danger" data-i18n="wf.del">删除</button>
       </div>
 
       <div class="main">
         <aside id="skills-panel" class="sidebar hidden">
           <div class="sidebar-head">
-            <span>技能库</span>
+            <span data-i18n="skills.libTitle">技能库</span>
             <span class="grow"></span>
-            <button id="skill-manage" title="打开技能库大窗口，按分类浏览">⛶ 全部</button>
-            <button id="skill-new">＋ 新建</button>
-            <button id="skill-sync">⇄ 仓库</button>
+            <button id="skill-manage" data-i18n="skills.all" data-i18n-title="skills.allTitle" title="打开技能库大窗口，按分类浏览">⛶ 全部</button>
+            <button id="skill-new" data-i18n="skills.new">＋ 新建</button>
+            <button id="skill-sync" data-i18n="skills.repo">⇄ 仓库</button>
           </div>
-          <div class="sidebar-note">SKILL.md 技能，挂到步骤上会作为该步的系统提示。</div>
+          <div class="sidebar-note" data-i18n="skills.note">SKILL.md 技能，挂到步骤上会作为该步的系统提示。</div>
           <div id="skills-list"></div>
         </aside>
-        <div id="side-splitter" class="splitter hidden" title="拖动调整技能栏宽度"></div>
+        <div id="side-splitter" class="splitter hidden" data-i18n-title="side.splitterTitle" title="拖动调整技能栏宽度"></div>
 
         <section id="pipe-editor" class="editor">
-          <label class="field-label" for="pipe-input">输入（用 <code>{{input}}</code> 引用）</label>
-          <textarea id="pipe-input" class="input-box" rows="3" placeholder="整条工作流要处理的素材，比如一段原始文案 / 主题…"></textarea>
+          <label class="field-label" for="pipe-input" data-i18n-html="pipe.inputLabel">输入（用 <code>{{input}}</code> 引用）</label>
+          <textarea id="pipe-input" class="input-box" rows="3" data-i18n-ph="pipe.inputPh" placeholder="整条工作流要处理的素材，比如一段原始文案 / 主题…"></textarea>
           <div id="steps"></div>
-          <div class="ref-hint">
+          <div class="ref-hint" data-i18n-html="pipe.refHint">
             占位符：<code>{{input}}</code> 初始输入 · <code>{{prev}}</code> 上一步输出 · <code>{{1}}</code><code>{{2}}</code>… 第 N 步输出
           </div>
         </section>
 
         <section id="geo-editor" class="editor hidden">
-          <label class="field-label" for="geo-title">标题 / 主题</label>
-          <input id="geo-title" class="input-box" placeholder="比如：家用咖啡机怎么选 / 2026 川西环线自驾指南" />
+          <label class="field-label" for="geo-title" data-i18n="geo.titleLabel">标题 / 主题</label>
+          <input id="geo-title" class="input-box" data-i18n-ph="geo.titlePh" placeholder="比如：家用咖啡机怎么选 / 2026 川西环线自驾指南" />
 
-          <label class="field-label" for="geo-material" style="margin-top: 12px">原文 / 素材（可选，贴进来会直接改写成文章）</label>
-          <textarea id="geo-material" class="input-box" rows="4" placeholder="把要改写的原文、笔记、要点直接贴这里——不用是链接或地点"></textarea>
+          <label class="field-label" for="geo-material" style="margin-top: 12px" data-i18n="geo.materialLabel">原文 / 素材（可选，贴进来会直接改写成文章）</label>
+          <textarea id="geo-material" class="input-box" rows="4" data-i18n-ph="geo.materialPh" placeholder="把要改写的原文、笔记、要点直接贴这里——不用是链接或地点"></textarea>
 
-          <label class="field-label" for="geo-source" style="margin-top: 12px">参考链接（可选，填了会抓取正文并改写）</label>
-          <input id="geo-source" class="input-box" placeholder="https://… 留空则按上面的素材 / 下面的要素原创" />
+          <label class="field-label" for="geo-source" style="margin-top: 12px" data-i18n="geo.sourceLabel">参考链接（可选，填了会抓取正文并改写）</label>
+          <input id="geo-source" class="input-box" data-i18n-ph="geo.sourcePh" placeholder="https://… 留空则按上面的素材 / 下面的要素原创" />
 
-          <label class="field-label" for="geo-route" style="margin-top: 12px">路线 / 地点（可选，地名直接写，按顺序）</label>
-          <textarea id="geo-route" class="input-box" rows="2" placeholder="留空就是普通文章；填了会按地点成章，如：成都 → 折多山 → 新都桥"></textarea>
+          <label class="field-label" for="geo-route" style="margin-top: 12px" data-i18n="geo.routeLabel">路线 / 地点（可选，地名直接写，按顺序）</label>
+          <textarea id="geo-route" class="input-box" rows="2" data-i18n-ph="geo.routePh" placeholder="留空就是普通文章；填了会按地点成章，如：成都 → 折多山 → 新都桥"></textarea>
 
-          <label class="field-label" style="margin-top: 12px">风格</label>
+          <label class="field-label" style="margin-top: 12px" data-i18n="geo.styleLabel">风格</label>
           <div id="geo-styles" class="geo-styles"></div>
 
-          <label class="field-label" style="margin-top: 12px">篇幅：约 <span id="geo-len-val">800</span> 字</label>
+          <label class="field-label" id="geo-len-label" style="margin-top: 12px"></label>
           <input id="geo-length" type="range" min="160" max="3000" step="20" value="800" />
 
           <div class="geo-sub-head">
-            <span>参数池（可选，注入文章的变量）</span>
-            <button id="geo-param-add" class="mini">＋ 加一项</button>
+            <span data-i18n="geo.paramHead">参数池（可选，注入文章的变量）</span>
+            <button id="geo-param-add" class="mini" data-i18n="geo.paramAdd">＋ 加一项</button>
           </div>
           <div id="geo-params"></div>
 
           <div class="geo-sub-head">
-            <span>地点卡片（可选，可拖拽排序）</span>
-            <button id="geo-card-add" class="mini">＋ 加地点</button>
+            <span data-i18n="geo.cardHead">地点卡片（可选，可拖拽排序）</span>
+            <button id="geo-card-add" class="mini" data-i18n="geo.cardAdd">＋ 加地点</button>
           </div>
           <div id="geo-cards"></div>
 
           <div class="geo-row" style="margin-top: 14px">
             <div class="col">
-              <label class="field-label">模型</label>
+              <label class="field-label" data-i18n="geo.modelLabel">模型</label>
               <select id="geo-worker"></select>
             </div>
             <div class="col">
-              <label class="field-label">GEO 技能（可选）</label>
+              <label class="field-label" data-i18n="geo.skillLabel">GEO 技能（可选）</label>
               <select id="geo-skill"></select>
             </div>
           </div>
           <div class="geo-row" style="margin-top: 10px">
             <div class="col">
-              <label class="field-label">配图来源（可选，CLI 出 SVG / 火山出实图）</label>
+              <label class="field-label" data-i18n="geo.imageLabel">配图来源（可选，CLI 出 SVG / 火山出实图）</label>
               <select id="geo-image"></select>
             </div>
           </div>
-          <div class="ref-hint">
+          <div class="ref-hint" data-i18n-html="geo.refHint">
             输出：带 H1–H4 层级的结构文 + 一条小推文（同次生成）。每个标题段都自成一段、能单独读懂。右侧结果可直接改。
           </div>
         </section>
 
         <section id="rt-editor" class="editor hidden">
-          <label class="field-label" for="rt-question">问题 / 议题</label>
-          <textarea id="rt-question" class="input-box" rows="3" placeholder="想让几个模型一起讨论的问题，比如：我这个桌面应用该用 Tauri 还是 Electron？为什么？"></textarea>
+          <label class="field-label" for="rt-question" data-i18n="rt.questionLabel">问题 / 议题</label>
+          <textarea id="rt-question" class="input-box" rows="3" data-i18n-ph="rt.questionPh" placeholder="想让几个模型一起讨论的问题，比如：我这个桌面应用该用 Tauri 还是 Electron？为什么？"></textarea>
 
-          <label class="field-label" for="rt-role" style="margin-top: 12px">讨论指令 / 角色（可选，对所有参与者生效）</label>
-          <input id="rt-role" class="input-box" placeholder="比如：你们是一个务实的技术评审会，敢于反驳、看重依据" />
+          <label class="field-label" for="rt-role" style="margin-top: 12px" data-i18n="rt.roleLabel">讨论指令 / 角色（可选，对所有参与者生效）</label>
+          <input id="rt-role" class="input-box" data-i18n-ph="rt.rolePh" placeholder="比如：你们是一个务实的技术评审会，敢于反驳、看重依据" />
 
           <div class="geo-sub-head">
-            <span>参与模型（按接力顺序，可拖拽排序）</span>
-            <button id="rt-add" class="mini">＋ 加一位</button>
+            <span data-i18n="rt.partHead">参与模型（按接力顺序，可拖拽排序）</span>
+            <button id="rt-add" class="mini" data-i18n="rt.addOne">＋ 加一位</button>
           </div>
           <div id="rt-participants"></div>
 
           <div class="geo-row" style="margin-top: 14px">
             <div class="col">
-              <label class="field-label">轮数：<span id="rt-rounds-val">2</span> 轮（每轮所有人各改进一次）</label>
+              <label class="field-label" id="rt-rounds-label"></label>
               <input id="rt-rounds" type="range" min="1" max="4" step="1" value="2" />
             </div>
             <div class="col">
-              <label class="field-label">主持人（最后综述用）</label>
+              <label class="field-label" data-i18n="rt.moderatorLabel">主持人（最后综述用）</label>
               <select id="rt-moderator"></select>
             </div>
           </div>
-          <div class="ref-hint">
+          <div class="ref-hint" data-i18n-html="rt.refHint">
             接力改进：第 1 位起草，后面每位在上一位的答案上改进；跑完所有轮后，主持人综述「共识 / 分歧 / 最终建议」。右侧每张结果都能直接改。
           </div>
         </section>
 
         <section id="code-editor" class="editor hidden">
-          <label class="field-label" for="code-dir">项目文件夹（Agent 会在这里真改文件）</label>
+          <label class="field-label" for="code-dir" data-i18n="code.dirLabel">项目文件夹（Agent 会在这里真改文件）</label>
           <div class="step-row">
-            <input id="code-dir" class="input-box col" placeholder="点右边选择 / 新建，或手动填绝对路径" />
-            <button id="code-pick">选择文件夹</button>
-            <button id="code-new">新建文件夹</button>
+            <input id="code-dir" class="input-box col" data-i18n-ph="code.dirPh" placeholder="点右边选择 / 新建，或手动填绝对路径" />
+            <button id="code-pick" data-i18n="code.pick">选择文件夹</button>
+            <button id="code-new" data-i18n="code.newFolder">新建文件夹</button>
           </div>
           <span id="code-dir-status" class="test-status"></span>
 
           <div class="geo-sub-head" style="margin-top: 12px">
-            <label class="field-label" for="code-task" style="margin: 0">任务 / 需求</label>
-            <button id="code-hist-open" class="mini" type="button">📋 历史任务</button>
+            <label class="field-label" for="code-task" style="margin: 0" data-i18n="code.taskLabel">任务 / 需求</label>
+            <button id="code-hist-open" class="mini" type="button" data-i18n="code.histOpen">📋 历史任务</button>
           </div>
-          <textarea id="code-task" class="input-box" rows="4" placeholder="想让它们一起做的事，比如：给这个项目加一个登录页，含表单校验和单元测试"></textarea>
+          <textarea id="code-task" class="input-box" rows="4" data-i18n-ph="code.taskPh" placeholder="想让它们一起做的事，比如：给这个项目加一个登录页，含表单校验和单元测试"></textarea>
 
-          <label class="field-label" for="code-role" style="margin-top: 12px">协作约定（可选，对所有 Agent 生效）</label>
-          <input id="code-role" class="input-box" placeholder="比如：改动尽量小、保持代码风格一致、不新增依赖" />
+          <label class="field-label" for="code-role" style="margin-top: 12px" data-i18n="code.roleLabel">协作约定（可选，对所有 Agent 生效）</label>
+          <input id="code-role" class="input-box" data-i18n-ph="code.rolePh" placeholder="比如：改动尽量小、保持代码风格一致、不新增依赖" />
 
           <div class="geo-sub-head">
-            <span>参与 Agent（仅本地 CLI，按接力顺序，可拖拽）</span>
-            <button id="code-add" class="mini">＋ 加一位</button>
+            <span data-i18n="code.agentHead">参与 Agent（仅本地 CLI，按接力顺序，可拖拽）</span>
+            <button id="code-add" class="mini" data-i18n="code.addOne">＋ 加一位</button>
           </div>
           <div id="code-agents"></div>
 
           <label class="code-auto-row" style="margin-top: 12px">
             <input type="checkbox" id="code-auto" />
-            <span>自动批准（无人值守，免确认）</span>
+            <span data-i18n="code.auto">自动批准（无人值守，免确认）</span>
           </label>
           <label class="code-auto-row" style="margin-top: 6px">
             <input type="checkbox" id="code-loop" />
-            <span>持续协作：每
-              <input id="code-loop-mins" type="number" min="0.5" max="60" step="0.5" class="code-loop-mins" />
-              分钟各 Agent 自动巡检一次，有新内容/问题就处理，不停留 · ⚠️ 持续耗 token</span>
+            <span data-i18n="code.loopPre">持续协作：每</span>
+            <input id="code-loop-mins" type="number" min="0.5" max="60" step="0.5" class="code-loop-mins" />
+            <span data-i18n="code.loopSuf">分钟各 Agent 自动巡检一次，有新内容/问题就处理，不停留 · ⚠️ 持续耗 token</span>
           </label>
 
-          <div class="ref-hint" style="margin-top: 10px">
+          <div class="ref-hint" style="margin-top: 10px" data-i18n-html="code.refHint">
             点「运行」→ 切到终端，每个 Agent 各开一个<strong>实时交互终端</strong>、并排在同一文件夹里干活（你能实时看、随时打字让它改）。
             队友通过项目根的 <code>TEAM_NOTES.md</code> 互通反馈。勾了「自动批准」就无人值守
             （Claude <code>--dangerously-skip-permissions</code>、Codex <code>--dangerously-bypass-approvals-and-sandbox</code>、Gemini <code>--yolo</code>、Grok <code>--always-approve</code>、Cursor <code>--force</code>）——
@@ -199,14 +200,14 @@
 
         <section id="term-panel" class="term-panel hidden">
           <div id="term-toolbar" class="term-toolbar hidden">
-            <span class="tb-label">持续协作</span>
-            <button id="stop-all-agents" class="danger mini" title="停止所有 AI 的持续协作并中断当前动作">■ 全部停止</button>
-            <button id="start-all-agents" class="mini" title="恢复所有 AI 的持续协作">▶ 全部开启</button>
+            <span class="tb-label" data-i18n="term.loopLabel">持续协作</span>
+            <button id="stop-all-agents" class="danger mini" data-i18n="term.stopAll" data-i18n-title="term.stopAllTitle" title="停止所有 AI 的持续协作并中断当前动作">■ 全部停止</button>
+            <button id="start-all-agents" class="mini" data-i18n="term.startAll" data-i18n-title="term.startAllTitle" title="恢复所有 AI 的持续协作">▶ 全部开启</button>
           </div>
           <div id="panes" class="panes"></div>
         </section>
 
-        <div id="col-splitter" class="splitter" title="拖动调整左右宽度"></div>
+        <div id="col-splitter" class="splitter" data-i18n-title="term.colSplitterTitle" title="拖动调整左右宽度"></div>
 
         <section class="results">
           <div id="results-list"></div>
@@ -216,163 +217,163 @@
 
     <div id="market-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title">模型市场</div>
-        <p class="modal-note">
+        <div class="modal-title" data-i18n="market.title">模型市场</div>
+        <p class="modal-note" data-i18n="market.note">
           一键添加。HTTP 厂商添加后到「厂商 / 命令 / Key」填 API Key；本地 CLI 需要你机器上已装好对应命令。
           端点和模型名随厂商更新会变，添加后都能自行修改。
         </p>
-        <div class="market-section">HTTP 厂商（OpenAI 兼容）</div>
+        <div class="market-section" data-i18n="market.secHttp">HTTP 厂商（OpenAI 兼容）</div>
         <div id="market-list"></div>
-        <div class="market-section">本地命令行（调本机 CLI，不走 API）</div>
+        <div class="market-section" data-i18n="market.secCli">本地命令行（调本机 CLI，不走 API）</div>
         <div id="market-cli-list"></div>
-        <div class="market-section">视频生成（异步任务，出可播放视频）</div>
+        <div class="market-section" data-i18n="market.secVideo">视频生成（异步任务，出可播放视频）</div>
         <div id="market-video-list"></div>
-        <div class="market-section">图片生成（文生图，出图片）</div>
+        <div class="market-section" data-i18n="market.secImage">图片生成（文生图，出图片）</div>
         <div id="market-image-list"></div>
         <div class="modal-btns">
-          <button id="market-close" class="primary">完成</button>
+          <button id="market-close" class="primary" data-i18n="market.done">完成</button>
         </div>
       </div>
     </div>
 
     <div id="settings-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title">厂商 / 命令 / Key</div>
-        <p class="modal-note">
+        <div class="modal-title" data-i18n="settings.title">厂商 / 命令 / Key</div>
+        <p class="modal-note" data-i18n-html="settings.note">
           HTTP 厂商：Endpoint 填到 <code>/chat/completions</code> 为止，Key 只存在本机。
           本地命令：填程序名和固定参数，运行时指令会作为最后一个参数传入（如 <code>claude -p &lt;指令&gt;</code>）。
         </p>
-        <div class="market-section">HTTP 厂商</div>
+        <div class="market-section" data-i18n="settings.secHttp">HTTP 厂商</div>
         <div id="providers-list"></div>
-        <button id="add-provider">＋ 加一个厂商</button>
-        <div class="market-section">本地命令行</div>
+        <button id="add-provider" data-i18n="settings.addProvider">＋ 加一个厂商</button>
+        <div class="market-section" data-i18n="settings.secCli">本地命令行</div>
         <div id="clis-list"></div>
-        <button id="add-cli">＋ 加一个命令</button>
-        <div class="market-section">视频生成（火山方舟 / Seedance 等，异步任务）</div>
+        <button id="add-cli" data-i18n="settings.addCli">＋ 加一个命令</button>
+        <div class="market-section" data-i18n="settings.secVideo">视频生成（火山方舟 / Seedance 等，异步任务）</div>
         <div id="videos-list"></div>
-        <button id="add-video">＋ 加一个视频源</button>
-        <div class="market-section">图片生成（文生图，如火山 Seedream）</div>
+        <button id="add-video" data-i18n="settings.addVideo">＋ 加一个视频源</button>
+        <div class="market-section" data-i18n="settings.secImage">图片生成（文生图，如火山 Seedream）</div>
         <div id="images-list"></div>
-        <button id="add-image">＋ 加一个图片源</button>
+        <button id="add-image" data-i18n="settings.addImage">＋ 加一个图片源</button>
         <div class="modal-btns">
-          <button id="settings-cancel">取消</button>
-          <button id="settings-save" class="primary">保存</button>
+          <button id="settings-cancel" data-i18n="settings.cancel">取消</button>
+          <button id="settings-save" class="primary" data-i18n="settings.save">保存</button>
         </div>
       </div>
     </div>
 
     <div id="term-skill-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title">发送技能到终端</div>
-        <p class="modal-note">点一个技能，把它的正文作为一条消息发给当前终端里运行的 CLI（对话中随时可发）。</p>
-        <input id="term-skill-search" class="input-box" placeholder="筛选 name / 描述…" />
+        <div class="modal-title" data-i18n="tsk.title">发送技能到终端</div>
+        <p class="modal-note" data-i18n="tsk.note">点一个技能，把它的正文作为一条消息发给当前终端里运行的 CLI（对话中随时可发）。</p>
+        <input id="term-skill-search" class="input-box" data-i18n-ph="tsk.searchPh" placeholder="筛选 name / 描述…" />
         <div id="term-skill-list" class="tsk-list"></div>
         <div class="modal-btns">
-          <button id="term-skill-close" class="primary">关闭</button>
+          <button id="term-skill-close" class="primary" data-i18n="tsk.close">关闭</button>
         </div>
       </div>
     </div>
 
     <div id="skill-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title" id="skill-modal-title">新建技能</div>
+        <div class="modal-title" id="skill-modal-title" data-i18n="skill.newTitle">新建技能</div>
         <div class="provider">
-          <label>名称（英文/数字，作文件夹名）</label>
+          <label data-i18n="skill.nameLabel">名称（英文/数字，作文件夹名）</label>
           <input id="skill-name" placeholder="copy-polish" />
-          <label>描述（一句话）</label>
-          <input id="skill-desc" placeholder="把文案改得更有网感" />
-          <label>分类（可选，自由填，如 写作 / 编程 / 设计；用于技能库归类）</label>
-          <input id="skill-category" placeholder="选已有或直接输新分类（如 写作）" list="skill-cat-list" />
+          <label data-i18n="skill.descLabel">描述（一句话）</label>
+          <input id="skill-desc" data-i18n-ph="skill.descPh" placeholder="把文案改得更有网感" />
+          <label data-i18n="skill.catLabel">分类（可选，自由填，如 写作 / 编程 / 设计；用于技能库归类）</label>
+          <input id="skill-category" data-i18n-ph="skill.catPh" placeholder="选已有或直接输新分类（如 写作）" list="skill-cat-list" />
           <datalist id="skill-cat-list"></datalist>
-          <label>正文（指令本体，会作为系统提示）</label>
-          <textarea id="skill-body" rows="10" placeholder="你是资深广告文案……"></textarea>
+          <label data-i18n="skill.bodyLabel">正文（指令本体，会作为系统提示）</label>
+          <textarea id="skill-body" rows="10" data-i18n-ph="skill.bodyPh" placeholder="你是资深广告文案……"></textarea>
         </div>
         <div class="modal-btns">
-          <button id="skill-delete" class="danger hidden">删除</button>
+          <button id="skill-delete" class="danger hidden" data-i18n="skill.delete">删除</button>
           <span class="grow"></span>
-          <button id="skill-cancel">取消</button>
-          <button id="skill-save" class="primary">保存</button>
+          <button id="skill-cancel" data-i18n="skill.cancel">取消</button>
+          <button id="skill-save" class="primary" data-i18n="skill.save">保存</button>
         </div>
       </div>
     </div>
 
     <div id="sync-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title">技能库仓库同步</div>
-        <p class="modal-note">技能库在 <code>~/.council/skills</code>。下载会把仓库里所有含 SKILL.md 的文件夹拷进来；上传会把整个技能库 commit 后 push 到你指定的仓库（用你本机的 git 凭证）。</p>
+        <div class="modal-title" data-i18n="sync.title">技能库仓库同步</div>
+        <p class="modal-note" data-i18n-html="sync.note">技能库在 <code>~/.council/skills</code>。下载会把仓库里所有含 SKILL.md 的文件夹拷进来；上传会把整个技能库 commit 后 push 到你指定的仓库（用你本机的 git 凭证）。</p>
         <div class="provider">
-          <label>下载：git 仓库 URL</label>
+          <label data-i18n="sync.dlLabel">下载：git 仓库 URL</label>
           <div class="step-row">
             <input id="sync-dl-url" class="col" placeholder="https://github.com/user/skills-repo.git" />
-            <button id="sync-dl-btn">下载</button>
+            <button id="sync-dl-btn" data-i18n="sync.dlBtn">下载</button>
           </div>
-          <label>上传：目标仓库 URL</label>
+          <label data-i18n="sync.upLabel">上传：目标仓库 URL</label>
           <div class="step-row">
             <input id="sync-up-url" class="col" placeholder="git@github.com:user/my-skills.git" />
           </div>
           <div class="step-row">
-            <input id="sync-up-msg" class="col" placeholder="提交说明（可留空）" />
-            <button id="sync-up-btn">上传</button>
+            <input id="sync-up-msg" class="col" data-i18n-ph="sync.upMsgPh" placeholder="提交说明（可留空）" />
+            <button id="sync-up-btn" data-i18n="sync.upBtn">上传</button>
           </div>
-          <label style="margin-top: 10px">从本地导入：选一个 SKILL.md 文件，或一个装有技能子文件夹的目录，拷进技能库</label>
+          <label style="margin-top: 10px" data-i18n="sync.importLabel">从本地导入：选一个 SKILL.md 文件，或一个装有技能子文件夹的目录，拷进技能库</label>
           <div class="step-row">
-            <button id="sync-import-file">选文件</button>
-            <button id="sync-import-dir">选文件夹</button>
+            <button id="sync-import-file" data-i18n="sync.importFile">选文件</button>
+            <button id="sync-import-dir" data-i18n="sync.importDir">选文件夹</button>
           </div>
           <input id="sync-file-input" type="file" accept=".md,.markdown" multiple class="hidden" />
           <input id="sync-dir-input" type="file" webkitdirectory multiple class="hidden" />
         </div>
         <pre id="sync-output" class="sync-output"></pre>
         <div class="modal-btns">
-          <button id="sync-close" class="primary">关闭</button>
+          <button id="sync-close" class="primary" data-i18n="sync.close">关闭</button>
         </div>
       </div>
     </div>
     <div id="skills-modal" class="modal hidden">
       <div class="modal-box wide resizable">
-        <div class="modal-title">技能库</div>
+        <div class="modal-title" data-i18n="skl.title">技能库</div>
         <div class="skl-bar">
-          <input id="skl-search" placeholder="搜索技能名 / 描述…" />
+          <input id="skl-search" data-i18n-ph="skl.searchPh" placeholder="搜索技能名 / 描述…" />
           <span class="grow"></span>
-          <button id="skl-new" class="primary">＋ 新建技能</button>
-          <button id="skl-sync">⇄ 仓库</button>
+          <button id="skl-new" class="primary" data-i18n="skl.new">＋ 新建技能</button>
+          <button id="skl-sync" data-i18n="skl.repo">⇄ 仓库</button>
         </div>
         <div class="skl-wrap">
           <div id="skl-cats" class="skl-cats"></div>
           <div id="skl-grid" class="skl-grid"></div>
         </div>
         <div class="modal-btns">
-          <button id="skills-close" class="primary">关闭</button>
+          <button id="skills-close" class="primary" data-i18n="skl.close">关闭</button>
         </div>
       </div>
     </div>
 
     <div id="code-hist-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title">协作编程 · 历史任务</div>
-        <p class="modal-note">每次「运行」自动存一份配置（目录 + 任务 + Agents，最近 30 份，存本机）。点一条即填回表单。</p>
+        <div class="modal-title" data-i18n="ch.title">协作编程 · 历史任务</div>
+        <p class="modal-note" data-i18n="ch.note">每次「运行」自动存一份配置（目录 + 任务 + Agents，最近 30 份，存本机）。点一条即填回表单。</p>
         <div id="code-hist-list" class="codehist-list"></div>
         <div class="modal-btns">
-          <button id="code-hist-clear" class="danger">清空</button>
+          <button id="code-hist-clear" class="danger" data-i18n="ch.clear">清空</button>
           <span class="grow"></span>
-          <button id="code-hist-close" class="primary">关闭</button>
+          <button id="code-hist-close" class="primary" data-i18n="ch.close">关闭</button>
         </div>
       </div>
     </div>
 
     <div id="history-modal" class="modal hidden">
       <div class="modal-box wide">
-        <div class="modal-title">运行历史</div>
-        <p class="modal-note">流水线 / 圆桌 / GEO 每次运行完自动存结果；协作编程任务（标「协作编程」）也在这里，点它即填回表单继续。点左侧条目查看 / 加载，可删除。</p>
+        <div class="modal-title" data-i18n="hist.title">运行历史</div>
+        <p class="modal-note" data-i18n="hist.note">流水线 / 圆桌 / GEO 每次运行完自动存结果；协作编程任务（标「协作编程」）也在这里，点它即填回表单继续。点左侧条目查看 / 加载，可删除。</p>
         <div class="history-wrap">
           <div id="history-list" class="history-list"></div>
           <pre id="history-view" class="history-view"></pre>
         </div>
         <div class="modal-btns">
-          <button id="history-clear" class="danger">清空历史</button>
+          <button id="history-clear" class="danger" data-i18n="hist.clear">清空历史</button>
           <span class="grow"></span>
-          <button id="history-copy">复制本条</button>
-          <button id="history-close" class="primary">关闭</button>
+          <button id="history-copy" data-i18n="hist.copy">复制本条</button>
+          <button id="history-close" class="primary" data-i18n="hist.close">关闭</button>
         </div>
       </div>
     </div>

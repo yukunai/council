@@ -293,6 +293,13 @@ button.armed {
   font-size: 12px;
   color: var(--muted);
 }
+/* Language picker in the toolbar — override the global `select { width: 100% }` */
+.lang-select {
+  width: auto !important;
+  max-width: 160px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
 .tab-stop {
   cursor: pointer;
   font-size: 10.5px;
