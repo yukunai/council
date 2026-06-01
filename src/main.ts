@@ -2989,7 +2989,10 @@ function renderCodeAgents() {
     // idle, so it shows a static label; reviewers/testers each set their own minutes, so a
     // downstream agent can scan *after* the upstream one has had time to make changes (not at the
     // same instant, which would make it see "no change" and waste the cycle).
-    const isImplRow = i === 0 || a.duty.includes("实现");
+    // Mirror runCoding's role logic exactly (empty duty falls back to DUTY_SUGGEST[i] then "实现"),
+    // so the row's label/timing matches how it will actually run.
+    const roleForRow = a.duty.trim() || DUTY_SUGGEST[i] || "实现";
+    const isImplRow = i === 0 || roleForRow.includes("实现");
     const loopRow = document.createElement("div");
     loopRow.className = "code-agent-loop";
     const llab = document.createElement("span");
@@ -3291,12 +3294,20 @@ class Term {
     };
     this.unlisten = await listen(`pty:exit:${sid}`, () => {
       term.writeln("\r\n\x1b[90m[进程已退出]\x1b[0m");
-      if (this.sessionId === sid) this.sessionId = null;
+      if (this.sessionId === sid) {
+        this.sessionId = null;
+        this.pane.renderTabs();
+        refreshTermToolbar();
+      }
     });
     try {
       await invoke("spawn_pty", { id: sid, program, args, cwd, cols: term.cols, rows: term.rows, onData });
     } catch (err) {
-      if (this.sessionId === sid) this.sessionId = null;
+      if (this.sessionId === sid) {
+        this.sessionId = null;
+        this.pane.renderTabs();
+        refreshTermToolbar();
+      }
       term.writeln(`\x1b[31m启动失败：${err instanceof Error ? err.message : String(err)}\x1b[0m`);
       return;
     }
@@ -3405,8 +3416,13 @@ class Pane {
   }
 
   closeTab(t: Term) {
+    // Stop its 持续协作 loop now (don't wait for the timer's self-clean) so no orphaned timer
+    // keeps firing and the toolbar state stays correct.
+    codeLoops.filter((l) => l.term === t).forEach((l) => clearInterval(l.timer));
+    codeLoops = codeLoops.filter((l) => l.term !== t);
     t.teardown();
     t.host.remove();
+    refreshTermToolbar();
     const i = this.tabs.indexOf(t);
     if (i < 0) return;
     this.tabs.splice(i, 1);
@@ -3440,8 +3456,8 @@ class Pane {
       const chip = document.createElement("div");
       chip.className = "tab" + (tm === this.active ? " active" : "");
       chip.innerHTML = `<span class="tab-title">${escHtml(label)}</span>`;
-      // 协作编程 agent: a per-AI 停止/开启 toggle (停 = stop loop + Esc; 开 = restart loop).
-      if (tm.loopParams) {
+      // 协作编程 agent (alive): a per-AI 停止/开启 toggle (停 = stop loop + Esc; 开 = restart loop).
+      if (tm.loopParams && tm.sessionId) {
         const looping = termHasLoop(tm);
         const tog = document.createElement("button");
         tog.className = "tab-stop" + (looping ? " on" : "");
