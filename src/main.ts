@@ -3002,8 +3002,8 @@ async function runCoding() {
       (skillText ? `${skillText}\n\n` : "") +
       `${notes}\n\n` +
       (isImpl
-        ? "现在开始动手，直接改文件。工作方式：每完成一步，先看一眼 TEAM_NOTES.md 有没有队友给你的新反馈——有就按反馈改，没有就直接做任务的下一步；就这样一步步自己推进，全程不要停下来问我、也不要等我确认，直到整个任务真正完成（每步简述你改了什么再继续，全部做完了再说一声）。"
-        : "现在请查看当前代码和 TEAM_NOTES.md，围绕你的职责动手（审查/修 bug/补测试/重构）；把要给别人的反馈写进 TEAM_NOTES.md，并简述你改了什么。");
+        ? "先快速过一遍当前项目代码和 TEAM_NOTES.md，判断这个任务已经做到哪一步了：如果之前已经做了一部分（这是续上一次、不是全新开始），就从没做完的地方接着做，绝不重复已经完成的工作；全新的才从头开始。确认进度后再动手、直接改文件。工作方式：每完成一步，先把这一步简要记进 TEAM_NOTES.md（当进度清单，方便重启后续上），再看一眼有没有队友给你的新反馈——有就按反馈改，没有就直接做下一步；就这样一步步自己推进，全程不要停下来问我、也不要等我确认，直到整个任务真正完成（全部做完了再说一声）。"
+        : "先看一遍当前代码和 TEAM_NOTES.md（可能是续上一次、不是全新开始），围绕你的职责动手（审查/修 bug/补测试/重构）；把要给别人的反馈写进 TEAM_NOTES.md——TEAM_NOTES.md 里已经提过的别重复提，只补新问题；简述你改了什么。");
     // One pane per agent (side by side) up to MAX_PANES; extra agents become tabs in the
     // last pane. Each launches the CLI interactively (no -p) seeded with the prompt.
     let pane: Pane;
