@@ -3105,7 +3105,7 @@ async function runCoding() {
       (skillText ? `${skillText}\n\n` : "") +
       `${notes}\n\n` +
       (isImpl
-        ? "先快速过一遍当前项目代码和 TEAM_NOTES.md，判断这个任务已经做到哪一步了：如果之前已经做了一部分（这是续上一次、不是全新开始），就从没做完的地方接着做，绝不重复已经完成的工作；全新的才从头开始。确认进度后再动手、直接改文件。工作方式：每完成一步，先把这一步简要记进 TEAM_NOTES.md（当进度清单，方便重启后续上），再看一眼有没有队友给你的新反馈——有就按反馈改，没有就直接做下一步；就这样一步步自己推进，全程不要停下来问我、也不要等我确认，直到整个任务真正完成（全部做完了再说一声）。"
+        ? "先快速过一遍当前项目代码和 TEAM_NOTES.md，判断任务做到哪了：之前做过一部分就从没做完处接着做、绝不重复已完成的工作，全新才从头。确认进度后动手、直接改文件，每完成一步先简要记进 TEAM_NOTES.md（当进度清单，方便重启续上）。每一步按这个规则走：① 先看 TEAM_NOTES.md；② 有反馈→优先处理反馈；③ 没反馈→继续推进还没完成的任务；④ 如果当前 scope 已全部完成→不要制造任务、不要重复编辑共享文件、不要为了“有动作”而做动作，进入 Idle 状态，等待新的需求 / 缺陷 / 反馈 / 方向再继续。全程不要停下来问我、也不要等我确认。"
         : "先看一遍当前代码和 TEAM_NOTES.md（可能是续上一次、不是全新开始），围绕你的职责动手（审查/修 bug/补测试/重构）；把要给别人的反馈写进 TEAM_NOTES.md——TEAM_NOTES.md 里已经提过的别重复提，只补新问题；简述你改了什么。");
     // One pane per agent (side by side) up to MAX_PANES; extra agents become tabs in the
     // last pane. Each launches the CLI interactively (no -p) seeded with the prompt.
@@ -3133,7 +3133,7 @@ async function runCoding() {
       const term = pane.active!;
       // Short nudge — the agent already knows its role/the TEAM_NOTES.md convention from launch.
       const nudge = isImpl
-        ? `先看 TEAM_NOTES.md 有没有新反馈：有就按反馈改，没有就直接做任务的下一步——不要停下来问我、也不要等我确认。整个任务都做完了再回"全部完成"。`
+        ? `先看 TEAM_NOTES.md：有反馈优先处理；没反馈就继续推进还没完成的任务。若当前 scope 已全部完成，就别制造任务、别重复编辑共享文件、别为“有动作”而动作——进入 Idle 等待，有新需求/缺陷/反馈/方向再继续。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
       // 主写(实现位)：写完一步后先休息可自定义的几分钟(默认 2)等用户介入；这段时间没人工干预(没新
       // 输出、没敲键盘)才提示它继续。审查/测试：按各自间隔(a.loopMins，留空用全局)巡检，可错开时序。
