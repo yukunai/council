@@ -1,4 +1,20 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import "@xterm/xterm/css/xterm.css";
+import {
+  parseModels,
+  parseArgs,
+  fillTemplate,
+  skillBody,
+  cnLen,
+  splitGeo,
+  extractSvg,
+  sanitizeSvg,
+  decodeWorker,
+} from "./utils";
 
 // Surface otherwise-silent runtime errors (incl. init-time) instead of a dead-looking UI.
 // Registered first so it catches throws during the rest of module evaluation.
@@ -51,6 +67,7 @@ interface Step {
 interface SkillInfo {
   name: string;
   description: string;
+  category: string; // free-form group label (frontmatter `category:`), "" = 未分类
 }
 
 // ---- GEO 单篇 ----
@@ -278,9 +295,15 @@ const PRESETS: Preset[] = [
 // 本地 CLI 预设。claude -p 已验证；codex exec / gemini -p 较有把握；grok 参数按你的 CLI 调整。
 const CLI_PRESETS: { name: string; program: string; args: string; note?: string }[] = [
   { name: "Claude Code", program: "claude", args: "-p" },
-  { name: "Codex (GPT)", program: "codex", args: "exec" },
-  { name: "Gemini CLI", program: "gemini", args: "-p" },
-  { name: "Grok CLI", program: "grok", args: "", note: "参数按你装的 grok CLI 调整" },
+  { name: "Codex (GPT)", program: "codex", args: "exec --skip-git-repo-check" },
+  { name: "Gemini CLI", program: "gemini", args: "-p --skip-trust" },
+  { name: "Grok CLI", program: "grok", args: "-p", note: "grok -p <提示>（单轮，打印到 stdout）；用法不同就改这里" },
+  {
+    name: "Cursor Agent",
+    program: "cursor-agent",
+    args: "-p --force",
+    note: "Cursor CLI：先 `cursor-agent login` 登录；-p 单轮打印、--force 免确认（协作编程改文件需要，纯问答可去掉）",
+  },
 ];
 
 function load<T>(key: string, fallback: T): T {
@@ -297,16 +320,177 @@ let clis: Cli[] = load(LS_CLIS, DEFAULT_CLIS);
 let videos: VideoProvider[] = load(LS_VIDEOS, DEFAULT_VIDEOS);
 let steps: Step[] = load(LS_PIPELINE, DEFAULT_STEPS);
 let skills: SkillInfo[] = [];
+// Skills checked in the left library = "default skills": auto-applied when launching a
+// terminal or running 协作编程 (on top of any per-agent skills).
+const LS_DEFAULT_SKILLS = "council.defaultskills";
+let defaultSkills: string[] = load(LS_DEFAULT_SKILLS, []);
+function saveDefaultSkills() {
+  localStorage.setItem(LS_DEFAULT_SKILLS, JSON.stringify(defaultSkills));
+}
+// User-created categories (so an empty category can exist before any skill uses it).
+const LS_SKILL_CATS = "council.skillcats";
+let customCategories: string[] = load(LS_SKILL_CATS, []);
+function saveCustomCats() {
+  localStorage.setItem(LS_SKILL_CATS, JSON.stringify(customCategories));
+}
+// Current category filter in the left skill sidebar.
+let sidebarCat = "全部";
+// All categories = those used by skills + the user-created ones (deduped, sorted).
+function allCategories(): string[] {
+  const used = skills.map((s) => s.category.trim()).filter(Boolean);
+  return [...new Set([...used, ...customCategories])].sort((a, b) => a.localeCompare(b, "zh"));
+}
 // Merge over defaults so a geo object persisted by an older build (missing newer
 // fields like source/material/image) doesn't blow up on access.
 let geo: GeoState = { ...DEFAULT_GEO, ...load(LS_GEO, {}) };
 let images: ImageProvider[] = load(LS_IMAGES, DEFAULT_IMAGES);
-let mode: string = load(LS_MODE, "pipe");
+// Default to pipeline (the primary workflow). LS_MODE is saved on switch but we deliberately
+// do NOT restore it at cold launch — user always starts on a focused primary view.
+// "term" is still reachable via the segmented button and spawns panes on demand.
+let mode: string = "pipe";
+if (!["pipe", "geo", "rt", "code", "term"].includes(mode)) mode = "pipe";
+
+// One-time arg fixes for CLIs added before the presets were corrected:
+//  - grok with empty args fails ("unrecognized subcommand") → needs `-p`.
+//  - codex/gemini refuse to run headless outside a trusted/git dir (圆桌/流水线 run them
+//    via piped stdio in the app's cwd) → codex needs `--skip-git-repo-check`, gemini `--skip-trust`.
+{
+  let fixed = false;
+  const ensure = (c: Cli, flag: string) => {
+    if (!c.args.split(/\s+/).includes(flag)) {
+      c.args = `${c.args} ${flag}`.trim();
+      fixed = true;
+    }
+  };
+  for (const c of clis) {
+    const prog = c.program.trim();
+    if (prog === "grok" && !c.args.trim()) {
+      c.args = "-p";
+      fixed = true;
+    }
+    if (prog === "codex") ensure(c, "--skip-git-repo-check");
+    if (prog === "gemini") ensure(c, "--skip-trust");
+  }
+  if (fixed) saveClis();
+}
 function saveGeo() {
   localStorage.setItem(LS_GEO, JSON.stringify(geo));
 }
 function saveImages() {
   localStorage.setItem(LS_IMAGES, JSON.stringify(images));
+}
+
+// ---- 圆桌 (round-table): one question, several models improve a shared answer in
+// relay order over N rounds, then a moderator model synthesizes 共识/分歧/最终建议. ----
+interface RtParticipant {
+  worker: string; // model worker value
+  skill: string; // optional attached skill (its body joins this one's system prompt)
+}
+interface RoundtableState {
+  question: string;
+  role: string; // optional shared system instruction for all participants
+  participants: RtParticipant[]; // in relay order, each model with its own optional skill
+  rounds: number;
+  moderator: string; // worker value used for the final synthesis
+}
+const LS_RT = "council.rt";
+const DEFAULT_RT: RoundtableState = { question: "", role: "", participants: [], rounds: 2, moderator: "" };
+let rt: RoundtableState = { ...DEFAULT_RT, ...load(LS_RT, {}) };
+// Normalize participants: tolerate the earlier shape where each was a bare worker string.
+rt.participants = (rt.participants as unknown[]).map((p) =>
+  typeof p === "string"
+    ? { worker: p, skill: "" }
+    : { worker: (p as RtParticipant).worker ?? "", skill: (p as RtParticipant).skill ?? "" },
+);
+function saveRt() {
+  localStorage.setItem(LS_RT, JSON.stringify(rt));
+}
+
+// ---- 协作编程 (collaborative coding): several local CLI agents take turns editing the
+// files in one project folder — agent 1 implements, the rest review / fix / continue. ----
+interface CodeAgent {
+  worker: string; // CLI worker value ("cli::<name>")
+  duty: string; // this agent's responsibility (实现 / 审查 / 测试 …)
+  skills: string[]; // attached skills (their bodies join this agent's system prompt)
+}
+interface CodingState {
+  dir: string; // absolute project folder; agents run with this as cwd
+  task: string;
+  role: string; // optional shared convention for all agents (style, no new deps…)
+  agents: CodeAgent[]; // each gets its own live terminal, by duty
+  auto: boolean; // inject each CLI's auto-approve flag so it runs unattended (no prompts)
+}
+const LS_CODE = "council.code";
+const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true };
+let code: CodingState = { ...DEFAULT_CODE, ...load(LS_CODE, {}) };
+// How to launch each CLI interactively, seeded with a task prompt, optionally unattended.
+// `auto` = the flag that disables "allow this action?" prompts. `promptArg`: true → pass
+// the prompt as a positional arg; false → CLI rejects a positional prompt (e.g. grok),
+// so launch bare and type the prompt into its stdin after it starts.
+interface CliLaunch {
+  auto: string[];
+  promptArg: boolean;
+  accept?: string; // keystrokes auto-sent after launch to clear a startup confirm dialog
+}
+const CLI_LAUNCH: Record<string, CliLaunch> = {
+  // claude --dangerously-skip-permissions shows a one-time "Yes, I accept" menu (default
+  // on "1. No"); auto-send Down+Enter to pick "2. Yes" so it runs unattended.
+  claude: { auto: ["--dangerously-skip-permissions"], promptArg: true, accept: "\x1b[B\r" },
+  codex: { auto: ["--dangerously-bypass-approvals-and-sandbox"], promptArg: true },
+  gemini: { auto: ["--yolo"], promptArg: true },
+  grok: { auto: ["--always-approve"], promptArg: false },
+  "cursor-agent": { auto: ["--force"], promptArg: true },
+};
+// The coding CLIs we know how to drive (value = bare program name); the 协作编程 model
+// dropdown offers these without needing them pre-added in 设置.
+const CODING_CLIS = [
+  { program: "claude", label: "Claude Code" },
+  { program: "codex", label: "Codex" },
+  { program: "gemini", label: "Gemini" },
+  { program: "grok", label: "Grok" },
+  { program: "cursor-agent", label: "Cursor" },
+];
+// Normalize agents: tolerate earlier shapes (bare worker string; single `skill`; and
+// the old "cli::<name>" worker → bare program name when it's a known coding CLI).
+code.agents = (code.agents as unknown[]).map((a) => {
+  if (typeof a === "string") return { worker: a, duty: "", skills: [] };
+  const o = a as { worker?: string; duty?: string; skill?: string; skills?: string[] };
+  const skills = Array.isArray(o.skills) ? o.skills : o.skill ? [o.skill] : [];
+  let worker = o.worker ?? "";
+  if (worker.startsWith("cli::")) {
+    const c = clis.find((x) => `cli::${x.name}` === worker);
+    if (c && CODING_CLIS.some((k) => k.program === c.program)) worker = c.program;
+  }
+  return { worker, duty: o.duty ?? "", skills };
+});
+function saveCode() {
+  localStorage.setItem(LS_CODE, JSON.stringify(code));
+}
+// Suggested duties pre-filled as agents are added, so the division of labor is clear.
+const DUTY_SUGGEST = ["实现功能", "审查 + 修 bug", "补测试", "重构 / 优化"];
+
+// ---- 运行历史: every completed run is saved (newest first, capped) so it can be re-read. ----
+interface HistEntry {
+  id: string;
+  time: number;
+  mode: string; // pipe | geo | rt | code
+  title: string;
+  md: string;
+}
+const LS_HISTORY = "council.history";
+let history: HistEntry[] = load(LS_HISTORY, []);
+const MODE_LABEL: Record<string, string> = { pipe: "流水线", geo: "单篇", rt: "圆桌", code: "协作编程" };
+function pushHistory(mode: string, title: string, md: string) {
+  if (!md.trim()) return;
+  history.unshift({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    time: Date.now(),
+    mode,
+    title: title.trim().slice(0, 60) || "(无题)",
+    md,
+  });
+  if (history.length > 50) history.length = 50;
+  saveHistoryLS();
 }
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -350,15 +534,7 @@ function saveSteps() {
   localStorage.setItem(LS_PIPELINE, JSON.stringify(steps));
 }
 
-function parseModels(s: string): string[] {
-  return s
-    .split(/[\n,]/)
-    .map((m) => m.trim())
-    .filter(Boolean);
-}
-function parseArgs(s: string): string[] {
-  return s.trim() ? s.trim().split(/\s+/) : [];
-}
+// parseModels / parseArgs now imported from ./utils (tested)
 
 function workerOptions(): { value: string; label: string }[] {
   const opts: { value: string; label: string }[] = [];
@@ -378,47 +554,52 @@ function workerOptions(): { value: string; label: string }[] {
   return opts;
 }
 
-function decodeWorker(
-  v: string,
-):
-  | { kind: "cli"; name: string }
-  | { kind: "video"; provider: string; model: string }
-  | { kind: "http"; provider: string; model: string } {
-  if (v.startsWith("cli::")) return { kind: "cli", name: v.slice(5) };
-  if (v.startsWith("vid::")) {
-    const parts = v.split("::");
-    return { kind: "video", provider: parts[1] ?? "", model: parts.slice(2).join("::") };
-  }
-  const parts = v.split("::");
-  return { kind: "http", provider: parts[1] ?? "", model: parts.slice(2).join("::") };
-}
+// decodeWorker now imported from ./utils (extended with image kind; pure + tested)
 
 // Make sure every step points at a worker that still exists.
-function normalizeWorkers() {
+function normalizeWorkers(): boolean {
   const opts = workerOptions();
   const valid = new Set(opts.map((o) => o.value));
   const fallback = opts[0]?.value ?? "";
+  let changed = false;
   for (const s of steps) {
-    if (!valid.has(s.worker)) s.worker = fallback;
-  }
-}
-
-// Strip YAML frontmatter from a SKILL.md, leaving the instruction body.
-function skillBody(content: string): string {
-  const t = content.replace(/^﻿/, "");
-  if (t.startsWith("---")) {
-    const end = t.indexOf("\n---", 3);
-    if (end !== -1) {
-      const after = t.indexOf("\n", end + 1);
-      return after !== -1 ? t.slice(after + 1).trim() : "";
+    if (!valid.has(s.worker)) {
+      s.worker = fallback;
+      changed = true;
     }
   }
-  return t.trim();
+  return changed;
+}
+
+// skillBody now imported from ./utils (pure + tested; handles BOM + frontmatter)
+
+// Populate a <select> from {value,label} options, marking `current` selected. Pass
+// `none` to prepend a blank "" option (its label) for the no-selection case.
+function fillSelect(
+  sel: HTMLSelectElement,
+  options: { value: string; label: string }[],
+  current: string,
+  opts: { none?: string } = {},
+) {
+  sel.innerHTML = "";
+  if (opts.none !== undefined) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = opts.none;
+    sel.appendChild(o);
+  }
+  for (const o of options) {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (o.value === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
 }
 
 // ---- step editor ----
 function renderSteps() {
-  normalizeWorkers();
+  if (normalizeWorkers()) saveSteps();
   stepsEl.innerHTML = "";
   const opts = workerOptions();
   steps.forEach((step, i) => {
@@ -443,13 +624,7 @@ function renderSteps() {
 
     const worker = document.createElement("select");
     worker.className = "step-worker";
-    for (const o of opts) {
-      const opt = document.createElement("option");
-      opt.value = o.value;
-      opt.textContent = o.label;
-      if (o.value === step.worker) opt.selected = true;
-      worker.appendChild(opt);
-    }
+    fillSelect(worker, opts, step.worker);
     worker.addEventListener("change", () => {
       step.worker = worker.value;
       saveSteps();
@@ -475,17 +650,9 @@ function renderSteps() {
     skillLabel.textContent = "技能";
     const skill = document.createElement("select");
     skill.className = "col";
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "（不挂技能）";
-    skill.appendChild(none);
-    for (const s of skills) {
-      const o = document.createElement("option");
-      o.value = s.name;
-      o.textContent = s.name;
-      if (s.name === step.skill) o.selected = true;
-      skill.appendChild(o);
-    }
+    fillSelect(skill, skills.map((s) => ({ value: s.name, label: s.name })), step.skill ?? "", {
+      none: "（不挂技能）",
+    });
     skill.addEventListener("change", () => {
       step.skill = skill.value || undefined;
       saveSteps();
@@ -514,15 +681,10 @@ function renderSteps() {
     stepsEl.appendChild(card);
   });
   refreshGeoSelectors();
+  refreshRtSelectors();
 }
 
-// ---- template filling ----
-function fillTemplate(tpl: string, input: string, outputs: string[], idx: number): string {
-  return tpl
-    .replace(/\{\{\s*input\s*\}\}/g, input)
-    .replace(/\{\{\s*prev\s*\}\}/g, idx > 0 ? outputs[idx - 1] ?? "" : input)
-    .replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n: string) => outputs[parseInt(n, 10) - 1] ?? "");
-}
+// fillTemplate now imported from ./utils (pure + tested)
 
 // ---- running ----
 let running = false;
@@ -542,6 +704,32 @@ function scheduleScroll() {
     scrollPending = false;
     resultsEl.scrollTop = resultsEl.scrollHeight;
   });
+}
+
+function makeTextFlusher(el: HTMLElement) {
+  let pending: string | null = null;
+  let raf = 0;
+  const flush = () => {
+    raf = 0;
+    if (pending === null) return;
+    el.textContent = pending;
+    pending = null;
+  };
+  return {
+    stream: (text: string) => {
+      pending = text;
+      if (!raf) raf = requestAnimationFrame(flush);
+    },
+    flush: () => {
+      if (raf) cancelAnimationFrame(raf);
+      flush();
+    },
+    cancel: () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      pending = null;
+    },
+  };
 }
 
 // Shared result-card shell: `.result` > `.result-head`(title … extras … status) > `.result-body`.
@@ -620,6 +808,7 @@ function runWorker(
   prompt: string,
   onDelta: (text: string) => void,
   onVideo: (url: string) => void,
+  cwd?: string, // CLI workers only: run the agent inside this project folder
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -658,6 +847,7 @@ function runWorker(
         program: c.program,
         args: parseArgs(c.args),
         prompt: full,
+        cwd: cwd || null,
         onEvent: channel,
       }).catch(reject);
       return;
@@ -722,7 +912,16 @@ async function run() {
   if (running) return;
   if (steps.length === 0) return;
   const my = beginRun();
+  try {
+    await runSteps(my);
+  } finally {
+    endRun(my);
+  }
+}
 
+// The pipeline body, split out so run() can guarantee endRun() in a finally — an
+// unexpected throw (not just a worker error) must never leave the UI stuck "running".
+async function runSteps(my: number) {
   const input = inputEl.value;
   const outputs: string[] = [];
 
@@ -749,6 +948,7 @@ async function run() {
     const prompt = fillTemplate(step.prompt, input, outputs, i);
     let acc = "";
     let videoUrl = "";
+    const textFlush = makeTextFlusher(card.body);
     try {
       await runWorker(
         step.worker,
@@ -756,10 +956,11 @@ async function run() {
         prompt,
         (text) => {
           acc += text;
-          card.body.textContent = acc;
+          textFlush.stream(acc);
           scheduleScroll();
         },
         (url) => {
+          textFlush.flush();
           videoUrl = url;
           const video = document.createElement("video");
           video.className = "result-video";
@@ -775,9 +976,11 @@ async function run() {
         },
       );
       // downstream steps can reference the video URL via {{prev}} / {{N}}
+      textFlush.flush();
       outputs[i] = videoUrl || acc;
       card.setStatus("done", my !== genId ? "已停止" : "完成");
     } catch (e) {
+      textFlush.cancel();
       if (my !== genId) break;
       card.body.classList.add("error");
       card.body.textContent = e instanceof Error ? e.message : String(e);
@@ -786,7 +989,12 @@ async function run() {
     }
   }
 
-  endRun(my);
+  if (my === genId && outputs.some((o) => o && o.trim())) {
+    const md =
+      `# 流水线\n\n**输入**\n\n${input || "(空)"}\n` +
+      steps.map((s, i) => `\n\n## ${i + 1}. ${s.title || "(未命名)"}\n\n${outputs[i] ?? ""}`).join("");
+    pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || "流水线", md);
+  }
 }
 
 // ---- settings list helpers (shared by providers / clis / videos / images) ----
@@ -997,182 +1205,125 @@ function closeSettings() {
 }
 
 // ---- model market ----
+// One market row: name + info lines + an add / 已添加 / 不可用 button. `rows` with empty
+// text are skipped, so optional endpoint/models/note all flow through the same builder.
+function marketCard(
+  container: HTMLElement,
+  opts: {
+    name: string;
+    rows?: { text: string; cls: string }[];
+    already: boolean;
+    soon?: boolean;
+    onAdd?: () => void;
+  },
+) {
+  const item = document.createElement("div");
+  item.className = "market-item" + (opts.soon ? " soon" : "");
+  const info = document.createElement("div");
+  info.className = "market-info";
+  const name = document.createElement("div");
+  name.className = "market-name";
+  name.textContent = opts.name;
+  info.appendChild(name);
+  for (const r of opts.rows ?? []) {
+    if (!r.text) continue;
+    const d = document.createElement("div");
+    d.className = r.cls;
+    d.textContent = r.text;
+    info.appendChild(d);
+  }
+  const add = document.createElement("button");
+  add.className = "market-add";
+  if (opts.soon) {
+    add.textContent = "不可用";
+    add.disabled = true;
+  } else if (opts.already) {
+    add.textContent = "已添加";
+    add.disabled = true;
+  } else {
+    add.textContent = "＋ 添加";
+    add.addEventListener("click", () => opts.onAdd?.());
+  }
+  item.append(info, add);
+  container.appendChild(item);
+}
+
 function renderMarket() {
   marketList.innerHTML = "";
   for (const preset of PRESETS) {
-    const item = document.createElement("div");
-    item.className = "market-item" + (preset.soon ? " soon" : "");
-
-    const info = document.createElement("div");
-    info.className = "market-info";
-    const name = document.createElement("div");
-    name.className = "market-name";
-    name.textContent = preset.name;
-    info.appendChild(name);
-    if (preset.endpoint) {
-      const ep = document.createElement("div");
-      ep.className = "market-ep";
-      ep.textContent = preset.endpoint;
-      info.appendChild(ep);
-    }
-    if (preset.models) {
-      const models = document.createElement("div");
-      models.className = "market-models";
-      models.textContent = "模型：" + parseModels(preset.models).join("、");
-      info.appendChild(models);
-    }
-    if (preset.note) {
-      const note = document.createElement("div");
-      note.className = "market-note";
-      note.textContent = preset.note;
-      info.appendChild(note);
-    }
-
-    const add = document.createElement("button");
-    add.className = "market-add";
-    const already = providers.some((p) => p.name === preset.name);
-    if (preset.soon) {
-      add.textContent = "不可用";
-      add.disabled = true;
-    } else if (already) {
-      add.textContent = "已添加";
-      add.disabled = true;
-    } else {
-      add.textContent = "＋ 添加";
-      add.addEventListener("click", () => {
-        providers.push({
-          name: preset.name,
-          endpoint: preset.endpoint,
-          key: "",
-          models: preset.models,
-        });
+    marketCard(marketList, {
+      name: preset.name,
+      rows: [
+        { text: preset.endpoint, cls: "market-ep" },
+        { text: preset.models ? "模型：" + parseModels(preset.models).join("、") : "", cls: "market-models" },
+        { text: preset.note ?? "", cls: "market-note" },
+      ],
+      already: providers.some((p) => p.name === preset.name),
+      soon: preset.soon,
+      onAdd: () => {
+        providers.push({ name: preset.name, endpoint: preset.endpoint, key: "", models: preset.models });
         saveProviders();
         renderSteps();
         renderMarket();
-      });
-    }
-
-    item.append(info, add);
-    marketList.appendChild(item);
+      },
+    });
   }
 
-  // local CLI presets
   marketCliList.innerHTML = "";
   for (const preset of CLI_PRESETS) {
-    const item = document.createElement("div");
-    item.className = "market-item";
-    const info = document.createElement("div");
-    info.className = "market-info";
-    const name = document.createElement("div");
-    name.className = "market-name";
-    name.textContent = preset.name;
-    info.appendChild(name);
-    const cmd = document.createElement("div");
-    cmd.className = "market-ep";
-    cmd.textContent = `${preset.program} ${preset.args} <指令>`.trim();
-    info.appendChild(cmd);
-    if (preset.note) {
-      const note = document.createElement("div");
-      note.className = "market-note";
-      note.textContent = preset.note;
-      info.appendChild(note);
-    }
-
-    const add = document.createElement("button");
-    add.className = "market-add";
-    const already = clis.some((c) => c.name === preset.name);
-    if (already) {
-      add.textContent = "已添加";
-      add.disabled = true;
-    } else {
-      add.textContent = "＋ 添加";
-      add.addEventListener("click", () => {
+    marketCard(marketCliList, {
+      name: preset.name,
+      rows: [
+        { text: `${preset.program} ${preset.args} <指令>`.trim(), cls: "market-ep" },
+        { text: preset.note ?? "", cls: "market-note" },
+      ],
+      already: clis.some((c) => c.name === preset.name),
+      onAdd: () => {
         clis.push({ name: preset.name, program: preset.program, args: preset.args });
         saveClis();
         renderSteps();
         renderMarket();
-      });
-    }
-    item.append(info, add);
-    marketCliList.appendChild(item);
+      },
+    });
   }
 
-  // video presets
   marketVideoList.innerHTML = "";
   for (const preset of VIDEO_PRESETS) {
-    const item = document.createElement("div");
-    item.className = "market-item";
-    const info = document.createElement("div");
-    info.className = "market-info";
-    const name = document.createElement("div");
-    name.className = "market-name";
-    name.textContent = preset.name;
-    info.appendChild(name);
-    const ep = document.createElement("div");
-    ep.className = "market-ep";
-    ep.textContent = preset.endpoint;
-    info.appendChild(ep);
-    const m = document.createElement("div");
-    m.className = "market-models";
-    m.textContent = `模型：${parseModels(preset.models).join("、")} · ${preset.resolution} ${preset.ratio} ${preset.duration}s`;
-    info.appendChild(m);
-
-    const add = document.createElement("button");
-    add.className = "market-add";
-    const already = videos.some((v) => v.name === preset.name);
-    if (already) {
-      add.textContent = "已添加";
-      add.disabled = true;
-    } else {
-      add.textContent = "＋ 添加";
-      add.addEventListener("click", () => {
+    marketCard(marketVideoList, {
+      name: preset.name,
+      rows: [
+        { text: preset.endpoint, cls: "market-ep" },
+        {
+          text: `模型：${parseModels(preset.models).join("、")} · ${preset.resolution} ${preset.ratio} ${preset.duration}s`,
+          cls: "market-models",
+        },
+      ],
+      already: videos.some((v) => v.name === preset.name),
+      onAdd: () => {
         videos.push({ ...preset });
         saveVideos();
         renderSteps();
         renderMarket();
-      });
-    }
-    item.append(info, add);
-    marketVideoList.appendChild(item);
+      },
+    });
   }
 
-  // image presets
   marketImageList.innerHTML = "";
   for (const preset of IMAGE_PRESETS) {
-    const item = document.createElement("div");
-    item.className = "market-item";
-    const info = document.createElement("div");
-    info.className = "market-info";
-    const name = document.createElement("div");
-    name.className = "market-name";
-    name.textContent = preset.name;
-    info.appendChild(name);
-    const ep = document.createElement("div");
-    ep.className = "market-ep";
-    ep.textContent = preset.endpoint;
-    info.appendChild(ep);
-    const m = document.createElement("div");
-    m.className = "market-models";
-    m.textContent = `模型：${parseModels(preset.models).join("、")} · ${preset.size}`;
-    info.appendChild(m);
-
-    const add = document.createElement("button");
-    add.className = "market-add";
-    const already = images.some((v) => v.name === preset.name);
-    if (already) {
-      add.textContent = "已添加";
-      add.disabled = true;
-    } else {
-      add.textContent = "＋ 添加";
-      add.addEventListener("click", () => {
+    marketCard(marketImageList, {
+      name: preset.name,
+      rows: [
+        { text: preset.endpoint, cls: "market-ep" },
+        { text: `模型：${parseModels(preset.models).join("、")} · ${preset.size}`, cls: "market-models" },
+      ],
+      already: images.some((v) => v.name === preset.name),
+      onAdd: () => {
         images.push({ ...preset });
         saveImages();
         renderSteps();
         renderMarket();
-      });
-    }
-    item.append(info, add);
-    marketImageList.appendChild(item);
+      },
+    });
   }
 }
 
@@ -1185,10 +1336,16 @@ async function refreshSkills() {
   }
   renderSkills();
   refreshGeoSelectors();
+  // keep the per-participant / per-agent 技能 dropdowns in sync with the library
+  renderRtParticipants();
+  renderCodeAgents();
+  if (!skillsModal.classList.contains("hidden")) renderSkillsModal();
 }
 
 function renderSkills() {
   skillsListEl.innerHTML = "";
+  // Drop any checked default-skills that no longer exist.
+  defaultSkills = defaultSkills.filter((n) => skills.some((s) => s.name === n));
   if (skills.length === 0) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
@@ -1196,25 +1353,62 @@ function renderSkills() {
     skillsListEl.appendChild(empty);
     return;
   }
-  const geoMode = mode === "geo";
-  // Mode-aware hint: in 单篇 a click selects the skill for this article; in 流水线 it edits.
   const note = document.createElement("div");
   note.className = "sidebar-note";
-  note.textContent = geoMode
-    ? "单篇模式：点技能 = 选用到本篇（再点取消）；✎ 编辑。"
-    : "流水线模式：点技能 = 编辑；挂到步骤用步骤里的技能下拉。";
+  note.textContent = "勾选 = 默认技能（协作编程自动带上）。终端里用 ⚡技能 随时调用。✎ 改名，删除在「仓库」。";
   skillsListEl.appendChild(note);
 
-  for (const s of skills) {
-    const item = document.createElement("div");
-    const active = geoMode && s.name === geo.skill;
-    item.className = "skill-item" + (active ? " active" : "");
+  // Category filter tags (dynamic: 全部 + whatever categories exist + 未分类 if any).
+  const cats = ["全部", ...allCategories(), ...(skills.some((s) => !s.category.trim()) ? ["未分类"] : [])];
+  if (!cats.includes(sidebarCat)) sidebarCat = "全部";
+  const catRow = document.createElement("div");
+  catRow.className = "skill-cats";
+  for (const c of cats) {
+    const chip = document.createElement("button");
+    chip.className = "skill-cat-chip" + (c === sidebarCat ? " active" : "");
+    chip.textContent = c;
+    chip.addEventListener("click", () => {
+      sidebarCat = c;
+      renderSkills();
+    });
+    catRow.appendChild(chip);
+  }
+  skillsListEl.appendChild(catRow);
 
-    const head = document.createElement("div");
-    head.className = "skill-item-head";
+  const shown = skills.filter((s) => sidebarCat === "全部" || (s.category.trim() || "未分类") === sidebarCat);
+  for (const s of shown) {
+    const item = document.createElement("div");
+    item.className = "skill-item";
+
+    const row = document.createElement("div");
+    row.className = "skill-row";
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "skill-check";
+    cb.checked = defaultSkills.includes(s.name);
+    cb.title = "勾选 = 默认技能";
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      if (cb.checked) {
+        if (!defaultSkills.includes(s.name)) defaultSkills.push(s.name);
+      } else {
+        defaultSkills = defaultSkills.filter((n) => n !== s.name);
+      }
+      saveDefaultSkills();
+    });
+
+    const txt = document.createElement("div");
+    txt.className = "skill-text";
     const name = document.createElement("div");
     name.className = "skill-name";
     name.textContent = s.name;
+    const desc = document.createElement("div");
+    desc.className = "skill-desc";
+    desc.textContent = s.description || "（无描述）";
+    txt.append(name, desc);
+    txt.addEventListener("click", () => openSkillEditor(s.name));
+
     const edit = document.createElement("button");
     edit.className = "skill-edit mini";
     edit.textContent = "✎";
@@ -1223,36 +1417,9 @@ function renderSkills() {
       e.stopPropagation();
       openSkillEditor(s.name);
     });
-    const del = document.createElement("button");
-    del.className = "skill-edit mini";
-    del.textContent = "🗑";
-    del.title = "删除这条技能（点两下确认）";
-    twoStepDelete(del, "🗑", "确认?", () => void doDeleteSkill(s.name));
-    head.append(name, edit, del);
 
-    const desc = document.createElement("div");
-    desc.className = "skill-desc";
-    desc.textContent = s.description || "（无描述）";
-    item.append(head, desc);
-
-    if (active) {
-      const badge = document.createElement("div");
-      badge.className = "skill-badge";
-      badge.textContent = "✓ 单篇已选用";
-      item.appendChild(badge);
-    }
-
-    item.addEventListener("click", () => {
-      if (mode === "geo") {
-        // Toggle: click the active one again to clear back to built-in GEO rules.
-        geo.skill = geo.skill === s.name ? "" : s.name;
-        saveGeo();
-        refreshGeoSelectors(); // sync the 单篇 技能 dropdown
-        renderSkills(); // re-highlight
-      } else {
-        openSkillEditor(s.name);
-      }
-    });
+    row.append(cb, txt, edit);
+    item.append(row);
     skillsListEl.appendChild(item);
   }
 }
@@ -1265,17 +1432,25 @@ async function openSkillEditor(name: string | null) {
   $("#skill-modal-title").textContent = name ? "编辑技能" : "新建技能";
   const nameEl = $<HTMLInputElement>("#skill-name");
   const descEl = $<HTMLInputElement>("#skill-desc");
+  const catEl = $<HTMLInputElement>("#skill-category");
   const bodyEl = $<HTMLTextAreaElement>("#skill-body");
   const delBtn = $<HTMLButtonElement>("#skill-delete");
+  // Category suggestions (used + user-created); typing a new one also creates that category.
+  $<HTMLDataListElement>("#skill-cat-list").innerHTML = allCategories()
+    .map((c) => `<option value="${escHtml(c)}"></option>`)
+    .join("");
   nameEl.value = name ?? "";
   descEl.value = "";
+  catEl.value = "";
   bodyEl.value = "";
   delBtn.classList.toggle("hidden", !name);
   if (name) {
     try {
       const content = await invoke<string>("read_skill", { name });
-      const m = content.match(/description:\s*(.*)/);
+      const m = content.match(/^description:\s*(.*)$/m);
       descEl.value = m ? m[1].trim() : "";
+      const cm = content.match(/^category:\s*(.*)$/m);
+      catEl.value = cm ? cm[1].trim() : "";
       bodyEl.value = skillBody(content);
     } catch {
       /* ignore */
@@ -1287,10 +1462,11 @@ async function openSkillEditor(name: string | null) {
 async function saveSkill() {
   const name = $<HTMLInputElement>("#skill-name").value.trim();
   const description = $<HTMLInputElement>("#skill-desc").value;
+  const category = $<HTMLInputElement>("#skill-category").value.trim();
   const body = $<HTMLTextAreaElement>("#skill-body").value;
   if (!name) return toast("技能要有名字");
   try {
-    await invoke("save_skill", { name, description, body });
+    await invoke("save_skill", { name, description, category, body });
     // renamed during edit → remove the old folder
     if (editingSkill && editingSkill !== name) {
       await invoke("delete_skill", { name: editingSkill });
@@ -1341,6 +1517,14 @@ async function doDeleteSkill(name: string) {
       geo.skill = ""; // was selected for 单篇 — clear it
       saveGeo();
     }
+    let changedSteps = false;
+    for (const step of steps) {
+      if (step.skill === name) {
+        step.skill = undefined;
+        changedSteps = true;
+      }
+    }
+    if (changedSteps) saveSteps();
     await refreshSkills();
     renderSteps();
   } catch (e) {
@@ -1426,6 +1610,7 @@ async function importLocalSkills(fileList: FileList | null) {
       const text = await f.text();
       const nameM = text.match(/^name:\s*(.*)$/m);
       const descM = text.match(/^description:\s*(.*)$/m);
+      const catM = text.match(/^category:\s*(.*)$/m);
       let name = nameM ? nameM[1].trim() : "";
       if (!name) {
         // Fall back to the containing folder name (folder pick) or the file stem.
@@ -1433,7 +1618,12 @@ async function importLocalSkills(fileList: FileList | null) {
         const parts = rel.split("/").filter(Boolean);
         name = parts.length >= 2 ? parts[parts.length - 2] : f.name.replace(/\.(md|markdown)$/i, "");
       }
-      await invoke("save_skill", { name, description: descM ? descM[1].trim() : "", body: skillBody(text) });
+      await invoke("save_skill", {
+        name,
+        description: descM ? descM[1].trim() : "",
+        category: catM ? catM[1].trim() : "",
+        body: skillBody(text),
+      });
       syncOutput.textContent += `✓ ${name}\n`;
       ok++;
     } catch (e) {
@@ -1453,13 +1643,7 @@ async function refreshWorkflowList() {
   } catch {
     names = [];
   }
-  wfLoadEl.innerHTML = "<option value=\"\">载入已存…</option>";
-  for (const n of names) {
-    const opt = document.createElement("option");
-    opt.value = n;
-    opt.textContent = n;
-    wfLoadEl.appendChild(opt);
-  }
+  fillSelect(wfLoadEl, names.map((n) => ({ value: n, label: n })), "", { none: "载入已存…" });
 }
 
 async function saveWorkflow() {
@@ -1496,11 +1680,12 @@ async function loadWorkflow(name: string) {
 
 async function deleteWorkflow() {
   const name = wfNameEl.value.trim();
-  if (!name) return;
-  if (!confirm(`删除工作流「${name}」？`)) return;
+  if (!name) return toast("先选中一个工作流");
   try {
     await invoke("delete_workflow", { name });
     await refreshWorkflowList();
+    wfNameEl.value = "";
+    wfLoadEl.value = "";
     flash(`已删除「${name}」`);
   } catch (e) {
     toast("删除失败：" + (e instanceof Error ? e.message : String(e)));
@@ -1635,32 +1820,26 @@ function renderGeoCards() {
 function refreshGeoSelectors() {
   const ws = $<HTMLSelectElement>("#geo-worker");
   if (!ws) return;
+  let changed = false;
   const opts = workerOptions().filter((o) => !o.value.startsWith("vid::"));
-  if (geo.worker && !opts.some((o) => o.value === geo.worker)) geo.worker = "";
-  if (!geo.worker) geo.worker = opts[0]?.value ?? "";
-  ws.innerHTML = "";
-  for (const o of opts) {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.label;
-    if (o.value === geo.worker) opt.selected = true;
-    ws.appendChild(opt);
+  if (geo.worker && !opts.some((o) => o.value === geo.worker)) {
+    geo.worker = "";
+    changed = true;
   }
+  if (!geo.worker) {
+    geo.worker = opts[0]?.value ?? "";
+    changed = true;
+  }
+  fillSelect(ws, opts, geo.worker);
 
   const sk = $<HTMLSelectElement>("#geo-skill");
-  sk.innerHTML = "";
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = "（用内置 GEO 规范）";
-  sk.appendChild(none);
-  if (geo.skill && !skills.some((s) => s.name === geo.skill)) geo.skill = "";
-  for (const s of skills) {
-    const o = document.createElement("option");
-    o.value = s.name;
-    o.textContent = s.name;
-    if (s.name === geo.skill) o.selected = true;
-    sk.appendChild(o);
+  if (geo.skill && !skills.some((s) => s.name === geo.skill)) {
+    geo.skill = "";
+    changed = true;
   }
+  fillSelect(sk, skills.map((s) => ({ value: s.name, label: s.name })), geo.skill, {
+    none: "（用内置 GEO 规范）",
+  });
 
   // 配图来源: local CLIs (→ SVG) + HTTP image providers (→ real image)
   const im = $<HTMLSelectElement>("#geo-image");
@@ -1671,19 +1850,12 @@ function refreshGeoSelectors() {
       imgOpts.push({ value: `img::${p.name}::${m}`, label: `🖼 ${p.name} · ${m}` });
     }
   }
-  if (geo.image && !imgOpts.some((o) => o.value === geo.image)) geo.image = "";
-  im.innerHTML = "";
-  const imgNone = document.createElement("option");
-  imgNone.value = "";
-  imgNone.textContent = "（不配图）";
-  im.appendChild(imgNone);
-  for (const o of imgOpts) {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.label;
-    if (o.value === geo.image) opt.selected = true;
-    im.appendChild(opt);
+  if (geo.image && !imgOpts.some((o) => o.value === geo.image)) {
+    geo.image = "";
+    changed = true;
   }
+  fillSelect(im, imgOpts, geo.image, { none: "（不配图）" });
+  if (changed) saveGeo();
 }
 
 function renderGeo() {
@@ -1732,17 +1904,9 @@ function buildGeoBrief(): string {
   return lines.join("\n");
 }
 
-// Rough Chinese character count (ignore whitespace) for the 字数 readout.
-function cnLen(s: string): number {
-  return s.replace(/\s+/g, "").length;
-}
+// cnLen now imported from ./utils (pure + tested)
 
-// Split the model output into article + tweet on the ===小推文=== delimiter line.
-function splitGeo(text: string): { article: string; tweet: string } {
-  const parts = text.split(/\n[ \t]*={2,}\s*小推文\s*={2,}[ \t]*\n?/);
-  if (parts.length >= 2) return { article: parts[0].trim(), tweet: parts.slice(1).join("\n").trim() };
-  return { article: text.trim(), tweet: "" };
-}
+// splitGeo now imported from ./utils (pure + tested)
 
 function makeGeoResultCard(title: string) {
   const copy = document.createElement("button");
@@ -1761,12 +1925,15 @@ function makeGeoResultCard(title: string) {
     }
   });
 
+  const textFlush = makeTextFlusher(body);
+
   return {
     streamText: (s: string) => {
-      body.textContent = s;
+      textFlush.stream(s);
     },
     // Replace streamed text with an editable textarea once generation finishes.
     setEditable: (s: string) => {
+      textFlush.cancel();
       body.innerHTML = "";
       const ta = document.createElement("textarea");
       ta.className = "result-edit";
@@ -1776,6 +1943,7 @@ function makeGeoResultCard(title: string) {
       getText = () => ta.value;
     },
     setError: (s: string) => {
+      textFlush.cancel();
       body.classList.add("error");
       body.textContent = s;
     },
@@ -1785,18 +1953,54 @@ function makeGeoResultCard(title: string) {
   };
 }
 
-function extractSvg(text: string): string {
-  const m = text.match(/<svg[\s\S]*?<\/svg>/i);
-  return m ? m[0] : "";
+// Stream one worker call into its own editable result card. `run(onDelta)` performs the
+// actual call. Returns the finished text + a live getText (for export/history), or null
+// if it errored / was stopped. genId-aware. Used by 圆桌 and 协作编程.
+async function streamCard(
+  my: number,
+  title: string,
+  verb: string,
+  run: (onDelta: (t: string) => void) => Promise<void>,
+  skippable = false,
+): Promise<{ text: string; getText: () => string } | null> {
+  const card = makeGeoResultCard(title);
+  // Headless CLIs (e.g. claude -p) often print nothing until they finish, so a tick of
+  // elapsed seconds makes clear the agent is alive and working, not stuck.
+  const t0 = Date.now();
+  let acc = "";
+  const status = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    card.setStatus("running", acc ? `${verb}… 约 ${cnLen(acc)} 字 · ${s}s` : `${verb}… ${s}s`);
+  };
+  status();
+  card.streamText("⏳ 运行中…（headless CLI 如 claude -p 多在跑完后才一次性输出）");
+  const timer = window.setInterval(status, 1000);
+  try {
+    await run((t) => {
+      if (!acc) card.streamText(""); // clear the waiting hint on first real output
+      acc += t;
+      card.streamText(acc);
+      status();
+      scheduleScroll();
+    });
+  } catch (e) {
+    clearInterval(timer);
+    if (my !== genId) return null;
+    card.setError(
+      "出错：" + (e instanceof Error ? e.message : String(e)) + (skippable ? "\n\n（已跳过这一位，继续下一位）" : ""),
+    );
+    card.setStatus("error", skippable ? "出错 · 跳过" : "出错");
+    return null;
+  }
+  clearInterval(timer);
+  if (my !== genId) return null;
+  const text = acc.trim();
+  card.setEditable(text);
+  card.setStatus("done", `${cnLen(text)} 字`);
+  return { text, getText: card.getText };
 }
-// CLI output is the user's own local agent, but strip scripts/handlers from SVG before
-// injecting it into the webview just to be safe.
-function sanitizeSvg(svg: string): string {
-  return svg
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, "");
-}
+
+// extractSvg / sanitizeSvg now imported from ./utils (pure + tested)
 
 type ImgResult = { kind: "svg" | "url" | "err"; data: string };
 async function generateImage(desc: string): Promise<ImgResult> {
@@ -1896,15 +2100,37 @@ function makeImageGallery() {
   };
 }
 
-// Top-of-results bar: copy the whole article and export it (with images + tweet) as Markdown.
-function makeGeoToolbar(buildMarkdown: () => string, titleHint: string) {
+// Top-of-results export bar (prepended above all result cards): 复制全文 / 导出 .md /
+// 导出 .txt. Builders are read lazily on click, so they capture the latest edited text.
+function makeExportToolbar(
+  cardTitle: string,
+  fileHint: string,
+  buildMarkdown: () => string,
+  buildText: () => string,
+) {
   const copy = document.createElement("button");
   copy.className = "mini";
   copy.textContent = "复制全文";
-  const exp = document.createElement("button");
-  exp.className = "mini primary";
-  exp.textContent = "导出 Markdown";
-  const { setStatus } = cardShell("整篇", { extras: [copy, exp], prepend: true, body: false });
+  const md = document.createElement("button");
+  md.className = "mini primary";
+  md.textContent = "导出 .md";
+  const txt = document.createElement("button");
+  txt.className = "mini";
+  txt.textContent = "导出 .txt";
+  const { setStatus } = cardShell(cardTitle, { extras: [copy, md, txt], prepend: true, body: false });
+
+  const download = (text: string, ext: string, mime: string) => {
+    const safe = (fileHint || "council").replace(/[\/\\:*?"<>|]+/g, "").slice(0, 40).trim() || "council";
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safe}${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus("done", "已导出");
+    setTimeout(() => setStatus("done", ""), 1500);
+  };
 
   copy.addEventListener("click", async () => {
     try {
@@ -1915,18 +2141,8 @@ function makeGeoToolbar(buildMarkdown: () => string, titleHint: string) {
       /* clipboard blocked */
     }
   });
-  exp.addEventListener("click", () => {
-    const safe = (titleHint || "article").replace(/[\/\\:*?"<>|]+/g, "").slice(0, 40).trim() || "article";
-    const blob = new Blob([buildMarkdown()], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${safe}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setStatus("done", "已导出");
-    setTimeout(() => setStatus("done", ""), 1500);
-  });
+  md.addEventListener("click", () => download(buildMarkdown(), ".md", "text/markdown;charset=utf-8"));
+  txt.addEventListener("click", () => download(buildText(), ".txt", "text/plain;charset=utf-8"));
 }
 
 async function runGeo() {
@@ -2043,7 +2259,19 @@ async function runGeo() {
       if (tw) md += `\n\n---\n\n**小推文**\n\n${tw}\n`;
       return md + "\n";
     };
-    makeGeoToolbar(buildMarkdown, geo.title.trim() || article.split("\n")[0].replace(/^#+\s*/, "").trim());
+    // Plain text: keep image markers as readable placeholders (no URLs / SVG), tweet plain.
+    const buildText = () => {
+      let t = card!
+        .getText()
+        .replace(/〔配图(\d+)〕/g, (_m, ns: string) => `[配图${ns}：${markers[parseInt(ns, 10) - 1] ?? ""}]`)
+        .trim();
+      const tw = tweetCard ? tweetCard.getText().trim() : "";
+      if (tw) t += `\n\n———\n小推文\n\n${tw}\n`;
+      return t + "\n";
+    };
+    const titleHint = geo.title.trim() || article.split("\n")[0].replace(/^#+\s*/, "").trim();
+    makeExportToolbar("整篇", titleHint, buildMarkdown, buildText);
+    pushHistory("geo", titleHint, buildMarkdown());
 
     // Generate an image per marker: HTTP image sources in parallel, local CLI serially
     // (CLI spawns a local process each time). Each slot can be retried on its own.
@@ -2086,36 +2314,1180 @@ async function runGeo() {
   }
 }
 
-function applyMode() {
-  const geoMode = mode === "geo";
-  geoEditor.classList.toggle("hidden", !geoMode);
-  pipeEditor.classList.toggle("hidden", geoMode);
-  $("#add-step").classList.toggle("hidden", geoMode);
-  wfbar.classList.toggle("hidden", geoMode);
-  $("#mode-pipe").classList.toggle("active", !geoMode);
-  $("#mode-geo").classList.toggle("active", geoMode);
-  document.getElementById("geo-empty-hint")?.remove();
-  renderSkills(); // click behavior + highlight differ per mode
-  if (geoMode) {
-    renderGeo();
-    if (!resultsEl.children.length) {
-      const hint = document.createElement("div");
-      hint.id = "geo-empty-hint";
-      hint.className = "empty";
-      hint.textContent = "填好左侧表单（标题 / 原文 / 链接 / 路线 任一即可），点「运行」生成结构文 + 小推文。";
-      resultsEl.appendChild(hint);
+// ---- 圆桌 mode ----
+const rtEditor = $<HTMLElement>("#rt-editor");
+
+// Workers usable in 圆桌 / 单篇: HTTP + CLI, but not video.
+function chatWorkerOptions() {
+  return workerOptions().filter((o) => !o.value.startsWith("vid::"));
+}
+function codingAgentOptions(): { value: string; label: string }[] {
+  const opts = CODING_CLIS.map((c) => ({ value: c.program, label: c.label }));
+  for (const c of clis) {
+    if (!CODING_CLIS.some((k) => k.program === c.program)) {
+      opts.push({ value: `cli::${c.name}`, label: `CLI · ${c.name}` });
     }
+  }
+  return opts;
+}
+// Resolve an agent's worker value to the program to launch (bare name, or a configured CLI).
+function codingProgram(worker: string): string {
+  if (worker.startsWith("cli::")) return clis.find((c) => `cli::${c.name}` === worker)?.program ?? "";
+  return worker;
+}
+
+// Each round-table participant is a card: a model select + its own skill select (so
+// different models can play different roles), draggable to set the relay order.
+let rtDragIdx: number | null = null;
+function renderRtParticipants() {
+  const wrap = $<HTMLDivElement>("#rt-participants");
+  wrap.innerHTML = "";
+  const opts = chatWorkerOptions();
+  if (!rt.participants.length) {
+    const note = document.createElement("div");
+    note.className = "sidebar-note";
+    note.textContent =
+      "还没有参与模型。点「＋ 加一位」，至少加 2 个（最好不同厂商）才有讨论的意义；可给每位单独挂技能，扮演不同角色。";
+    wrap.appendChild(note);
+  }
+  rt.participants.forEach((p, i) => {
+    const cardEl = document.createElement("div");
+    cardEl.className = "code-agent";
+    cardEl.draggable = true;
+    cardEl.addEventListener("dragstart", () => (rtDragIdx = i));
+    cardEl.addEventListener("dragover", (e) => e.preventDefault());
+    cardEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (rtDragIdx === null || rtDragIdx === i) return;
+      const [m] = rt.participants.splice(rtDragIdx, 1);
+      rt.participants.splice(i, 0, m);
+      rtDragIdx = null;
+      saveRt();
+      renderRtParticipants();
+    });
+
+    const head = document.createElement("div");
+    head.className = "code-agent-head";
+    const handle = document.createElement("span");
+    handle.className = "geo-handle";
+    handle.textContent = "⠿";
+    const num = document.createElement("span");
+    num.className = "rt-num";
+    num.textContent = `${i + 1}.`;
+
+    const wsel = document.createElement("select");
+    const list =
+      p.worker && !opts.some((o) => o.value === p.worker)
+        ? [...opts, { value: p.worker, label: `（已失效）${workerLabel(p.worker)}` }]
+        : opts;
+    fillSelect(wsel, list, p.worker);
+    wsel.addEventListener("change", () => {
+      p.worker = wsel.value;
+      saveRt();
+    });
+
+    const del = document.createElement("button");
+    del.className = "danger mini";
+    del.textContent = "✕";
+    del.addEventListener("click", () => {
+      rt.participants.splice(i, 1);
+      saveRt();
+      renderRtParticipants();
+    });
+    head.append(handle, num, wsel, del);
+
+    const skillRow = document.createElement("div");
+    skillRow.className = "rt-skill";
+    const lab = document.createElement("span");
+    lab.className = "wfbar-label";
+    lab.textContent = "技能";
+    const ssel = document.createElement("select");
+    if (p.skill && !skills.some((s) => s.name === p.skill)) p.skill = ""; // skill was deleted → clear
+    fillSelect(ssel, skills.map((s) => ({ value: s.name, label: s.name })), p.skill, { none: "（不挂技能）" });
+    ssel.addEventListener("change", () => {
+      p.skill = ssel.value;
+      saveRt();
+    });
+    skillRow.append(lab, ssel);
+
+    cardEl.append(head, skillRow);
+    wrap.appendChild(cardEl);
+  });
+}
+
+function refreshRtSelectors() {
+  const md = $<HTMLSelectElement>("#rt-moderator");
+  if (!md) return;
+  let changed = false;
+  const opts = chatWorkerOptions();
+  if (rt.moderator && !opts.some((o) => o.value === rt.moderator)) {
+    rt.moderator = "";
+    changed = true;
+  }
+  if (!rt.moderator) {
+    rt.moderator = opts[0]?.value ?? "";
+    changed = true;
+  }
+  fillSelect(md, opts, rt.moderator);
+  if (changed) saveRt();
+}
+
+function renderRt() {
+  $<HTMLTextAreaElement>("#rt-question").value = rt.question;
+  $<HTMLInputElement>("#rt-role").value = rt.role;
+  $<HTMLInputElement>("#rt-rounds").value = String(rt.rounds);
+  $("#rt-rounds-val").textContent = String(rt.rounds);
+  renderRtParticipants();
+  refreshRtSelectors();
+}
+
+async function runRoundtable() {
+  if (running) return;
+  if (!rt.question.trim()) return toast("先填讨论的问题");
+  const valid = new Set(chatWorkerOptions().map((o) => o.value));
+  const parts = rt.participants.filter((p) => valid.has(p.worker));
+  if (parts.length < 2) return toast("至少选 2 个有效的参与模型");
+  if (!rt.moderator || !valid.has(rt.moderator)) return toast("先选一个有效的主持人（综述用）");
+
+  const my = beginRun();
+  try {
+    const Q = rt.question.trim();
+    const baseSys = rt.role.trim() || "你在参加一个多模型接力讨论，目标是把这个问题的答案打磨到最好。";
+    const transcript: { label: string; round: number; text: string }[] = [];
+    // Cards in display order, read lazily at export time so edits are captured.
+    const exportEntries: { heading: string; getText: () => string }[] = [];
+    let draft = "";
+
+    // Preload each attached skill's body once (its text layers onto that one's system prompt).
+    const bodies: Record<string, string> = {};
+    for (const p of parts) {
+      if (p.skill && !(p.skill in bodies)) {
+        try {
+          bodies[p.skill] = skillBody(await invoke<string>("read_skill", { name: p.skill }));
+        } catch {
+          bodies[p.skill] = "";
+        }
+      }
+    }
+    if (my !== genId) return;
+
+    const contribute = (title: string, worker: string, system: string, prompt: string, verb: string, skippable = false) =>
+      streamCard(my, title, verb, (onDelta) => runWorker(worker, system, prompt, onDelta, () => {}), skippable);
+
+    for (let r = 1; r <= rt.rounds; r++) {
+      for (let pi = 0; pi < parts.length; pi++) {
+        if (my !== genId) return;
+        const { worker, skill } = parts[pi];
+        // Each participant's skill (if any) layers on top of the shared discussion role.
+        const skillText = skill ? bodies[skill] ?? "" : "";
+        const system = [skillText, baseSys].map((s) => s.trim()).filter(Boolean).join("\n\n");
+        // No good answer yet (first overall, or an earlier drafter failed) → draft fresh.
+        const first = !draft;
+        const prompt = first
+          ? `问题：\n${Q}\n\n请给出你的回答：尽量完整、准确、有依据。`
+          : `问题：\n${Q}\n\n目前的答案（由上一位参与者给出）：\n"""\n${draft}\n"""\n\n请在此基础上改进：补充遗漏、纠正错误或不准确之处、删去冗余空话，让答案更完整准确。直接输出改进后的【完整答案】，不要只写"我改了什么"，也不要加解释。`;
+        const heading = `第 ${r} 轮 · ${workerLabel(worker)}${skill ? ` · 技能:${skill}` : ""}`;
+        const res = await contribute(
+          heading,
+          worker,
+          system,
+          prompt,
+          first ? "起草中" : "改进中",
+          true, // skippable: a failed participant is skipped, not fatal
+        );
+        if (my !== genId) return; // 「停止」→ 整场中止
+        // 出错的这位：卡片已显示报错，跳过它、保留上一份好答案，继续下一位——
+        // 一个模型挂了不该让整场圆桌停摆。
+        if (res) {
+          draft = res.text;
+          transcript.push({ label: workerLabel(worker), round: r, text: res.text });
+          exportEntries.push({ heading, getText: res.getText });
+        }
+      }
+    }
+
+    if (my !== genId) return;
+    if (!transcript.length) {
+      toast("所有参与模型都没成功，没法综述——看各卡片的报错，多半是某个模型的参数 / Key 问题");
+      return;
+    }
+    const tx = transcript
+      .map((t) => `【第 ${t.round} 轮 · ${t.label}】\n${t.text.slice(0, 6000)}`)
+      .join("\n\n");
+    const modPrompt = `问题：\n${Q}\n\n以下是多个模型多轮接力改进的完整记录：\n\n${tx}\n\n请你作为主持人综述，用 Markdown 分三节：\n## 共识\n大家一致认可的结论。\n## 分歧与演变\n观点如何变化、还有哪些不同看法或未解的问题。\n## 最终建议\n综合各方，给出你认为最好的最终答案。`;
+    const modHeading = `主持人综述 · ${workerLabel(rt.moderator)}`;
+    const modRes = await contribute(
+      modHeading,
+      rt.moderator,
+      "你是这场多模型讨论的主持人，客观中立，善于提炼共识与分歧。",
+      modPrompt,
+      "综述中",
+    );
+    if (my !== genId) return;
+    if (modRes) exportEntries.push({ heading: modHeading, getText: modRes.getText });
+
+    // Export the whole session (question + every contribution + synthesis) as .md / .txt.
+    const buildMarkdown = () => {
+      let s = `# 圆桌讨论\n\n**问题**\n\n${Q}\n`;
+      for (const e of exportEntries) s += `\n\n## ${e.heading}\n\n${e.getText().trim()}\n`;
+      return s + "\n";
+    };
+    const buildText = () => {
+      const bar = "=".repeat(40);
+      let s = `圆桌讨论\n\n问题：\n${Q}\n`;
+      for (const e of exportEntries) s += `\n\n${bar}\n${e.heading}\n${bar}\n\n${e.getText().trim()}\n`;
+      return s + "\n";
+    };
+    makeExportToolbar("整场", rt.question.trim() || "圆桌讨论", buildMarkdown, buildText);
+    pushHistory("rt", rt.question.trim() || "圆桌讨论", buildMarkdown());
+  } catch (e) {
+    if (my === genId) toast(e instanceof Error ? e.message : String(e));
+  } finally {
+    endRun(my);
   }
 }
 
+// ---- 运行历史 viewer ----
+const historyModal = $<HTMLDivElement>("#history-modal");
+let historyViewId: string | null = null;
+function saveHistoryLS() {
+  localStorage.setItem(LS_HISTORY, JSON.stringify(history));
+}
+function renderHistory() {
+  const listEl = $<HTMLDivElement>("#history-list");
+  const viewEl = $<HTMLPreElement>("#history-view");
+  listEl.innerHTML = "";
+  if (!history.length) {
+    const empty = document.createElement("div");
+    empty.className = "sidebar-note";
+    empty.textContent = "还没有历史。跑一次任何模式就会自动存。";
+    listEl.appendChild(empty);
+    viewEl.textContent = "";
+    historyViewId = null;
+    return;
+  }
+  if (!historyViewId || !history.some((h) => h.id === historyViewId)) historyViewId = history[0].id;
+  for (const h of history) {
+    const item = document.createElement("div");
+    item.className = "history-item" + (h.id === historyViewId ? " active" : "");
+    const t = new Date(h.time);
+    const when = `${t.getMonth() + 1}-${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    const title = document.createElement("span");
+    title.className = "h-title";
+    title.textContent = h.title;
+    const meta = document.createElement("span");
+    meta.className = "h-meta";
+    meta.textContent = `${MODE_LABEL[h.mode] ?? h.mode} · ${when}`;
+    const del = document.createElement("button");
+    del.className = "danger mini h-del";
+    del.textContent = "✕";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      history = history.filter((x) => x.id !== h.id);
+      if (historyViewId === h.id) historyViewId = null;
+      saveHistoryLS();
+      renderHistory();
+    });
+    item.append(title, meta, del);
+    item.addEventListener("click", () => {
+      historyViewId = h.id;
+      renderHistory();
+    });
+    listEl.appendChild(item);
+  }
+  const cur = history.find((h) => h.id === historyViewId);
+  viewEl.textContent = cur ? cur.md : "";
+}
+
+// ---- 技能库大窗（按分类浏览 / 搜索 / 管理）----
+const skillsModal = $<HTMLDivElement>("#skills-modal");
+let sklCat = "全部";
+let sklSearch = "";
+// Track the dragged skill via a module var (WKWebView's dataTransfer is unreliable —
+// same pattern as the geo/rt/code card drag).
+let sklDragName: string | null = null;
+// Re-save a skill with a new category (keeps its description + body). Used by drag-to-category.
+async function setSkillCategory(name: string, category: string) {
+  try {
+    const content = await invoke<string>("read_skill", { name });
+    const m = content.match(/^description:\s*(.*)$/m);
+    await invoke("save_skill", { name, description: m ? m[1].trim() : "", category, body: skillBody(content) });
+    await refreshSkills(); // re-renders sidebar + this modal
+    toast(`「${name}」已移到「${category || "未分类"}」`, "info");
+  } catch (e) {
+    toast("移动失败：" + (e instanceof Error ? e.message : String(e)));
+  }
+}
+function renderSkillsModal() {
+  const catsEl = $<HTMLDivElement>("#skl-cats");
+  const gridEl = $<HTMLDivElement>("#skl-grid");
+  const counts = new Map<string, number>();
+  for (const s of skills) {
+    const c = s.category.trim() || "未分类";
+    counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  const cats = ["全部", ...allCategories(), ...(counts.has("未分类") ? ["未分类"] : [])];
+  if (!cats.includes(sklCat)) sklCat = "全部";
+
+  catsEl.innerHTML = "";
+  // ＋ 新建分类: type a name → it becomes a (possibly empty) category you can assign to skills.
+  const addRow = document.createElement("div");
+  addRow.className = "skl-cat-add";
+  const addInput = document.createElement("input");
+  addInput.placeholder = "新建分类…";
+  const addBtn = document.createElement("button");
+  addBtn.className = "mini";
+  addBtn.textContent = "＋";
+  const commit = () => {
+    const name = addInput.value.trim();
+    if (!name) return;
+    if (!allCategories().includes(name)) {
+      customCategories.push(name);
+      saveCustomCats();
+    }
+    addInput.value = "";
+    sklCat = name;
+    renderSkillsModal();
+  };
+  addBtn.addEventListener("click", commit);
+  addInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") commit();
+  });
+  addRow.append(addInput, addBtn);
+  catsEl.appendChild(addRow);
+  for (const c of cats) {
+    const item = document.createElement("div");
+    item.className = "skl-cat" + (c === sklCat ? " active" : "");
+    const label = document.createElement("span");
+    label.textContent = c;
+    const cnt = document.createElement("span");
+    cnt.className = "skl-count";
+    cnt.textContent = String(c === "全部" ? skills.length : counts.get(c) ?? 0);
+    item.append(label, cnt);
+    item.addEventListener("click", () => {
+      sklCat = c;
+      renderSkillsModal();
+    });
+    // Drop a skill card here to move it into this category ("全部" isn't a real target).
+    if (c !== "全部") {
+      item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        item.classList.add("drop-hover");
+      });
+      item.addEventListener("dragleave", () => item.classList.remove("drop-hover"));
+      item.addEventListener("drop", (e) => {
+        e.preventDefault();
+        item.classList.remove("drop-hover");
+        if (sklDragName) void setSkillCategory(sklDragName, c === "未分类" ? "" : c);
+        sklDragName = null;
+      });
+    }
+    catsEl.appendChild(item);
+  }
+
+  const q = sklSearch.trim().toLowerCase();
+  const filtered = skills.filter((s) => {
+    const c = s.category.trim() || "未分类";
+    if (sklCat !== "全部" && c !== sklCat) return false;
+    if (q && !(s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))) return false;
+    return true;
+  });
+  gridEl.innerHTML = "";
+  if (!filtered.length) {
+    const e = document.createElement("div");
+    e.className = "skl-empty";
+    e.textContent = !skills.length
+      ? "技能库还是空的。点「＋ 新建技能」或「⇄ 仓库」。"
+      : sklCat !== "全部" && sklCat !== "未分类"
+        ? `「${sklCat}」分类暂无技能——新建 / 编辑技能时把「分类」选成「${sklCat}」即可归入。`
+        : "没有匹配的技能。";
+    gridEl.appendChild(e);
+    return;
+  }
+  for (const s of filtered) {
+    const card = document.createElement("div");
+    card.className = "skl-card";
+    card.draggable = true; // drag onto a category (left) to move it there
+    card.addEventListener("dragstart", () => (sklDragName = s.name));
+    const head = document.createElement("div");
+    head.className = "skl-card-head";
+    const nm = document.createElement("span");
+    nm.className = "skl-card-name";
+    nm.textContent = s.name;
+    const edit = document.createElement("button");
+    edit.className = "skill-edit mini";
+    edit.textContent = "✎";
+    edit.title = "编辑";
+    edit.addEventListener("click", () => openSkillEditor(s.name));
+    const del = document.createElement("button");
+    del.className = "skill-edit mini";
+    del.textContent = "🗑";
+    del.title = "删除（点两下确认）";
+    twoStepDelete(del, "🗑", "确认?", () => void doDeleteSkill(s.name));
+    head.append(nm, edit, del);
+    card.append(head);
+    if (s.category.trim()) {
+      const cat = document.createElement("span");
+      cat.className = "skl-card-cat";
+      cat.textContent = "🏷 " + s.category.trim();
+      card.append(cat);
+    }
+    const desc = document.createElement("div");
+    desc.className = "skl-card-desc";
+    desc.textContent = s.description || "（无描述）";
+    card.append(desc);
+
+    // Reliable (non-drag) way to move a skill into a category: a dropdown.
+    const moveRow = document.createElement("div");
+    moveRow.className = "skl-move-row";
+    const moveLab = document.createElement("span");
+    moveLab.textContent = "分类";
+    const move = document.createElement("select");
+    move.className = "skl-move";
+    move.title = "移动到分类";
+    const cur = s.category.trim();
+    for (const cat of ["", ...allCategories()]) {
+      const o = document.createElement("option");
+      o.value = cat;
+      o.textContent = cat || "未分类";
+      if (cat === cur) o.selected = true;
+      move.appendChild(o);
+    }
+    move.addEventListener("change", () => void setSkillCategory(s.name, move.value));
+    moveRow.append(moveLab, move);
+    card.append(moveRow);
+
+    gridEl.appendChild(card);
+  }
+}
+function openSkillsModal() {
+  renderSkillsModal();
+  skillsModal.classList.remove("hidden");
+}
+
+// ---- 协作编程 mode ----
+const codeEditor = $<HTMLElement>("#code-editor");
+
+let codeDragIdx: number | null = null;
+function renderCodeAgents() {
+  const wrap = $<HTMLDivElement>("#code-agents");
+  wrap.innerHTML = "";
+  const opts = codingAgentOptions();
+  if (!code.agents.length) {
+    const note = document.createElement("div");
+    note.className = "sidebar-note";
+    note.textContent =
+      "还没有 Agent。点「＋ 加一位」加本地 CLI（Claude Code / Codex / Gemini / Grok），并给每位写明职责。HTTP 模型不能改文件，这里不列。";
+    wrap.appendChild(note);
+  }
+  code.agents.forEach((a, i) => {
+    const cardEl = document.createElement("div");
+    cardEl.className = "code-agent";
+    cardEl.draggable = true;
+    cardEl.addEventListener("dragstart", () => (codeDragIdx = i));
+    cardEl.addEventListener("dragover", (e) => e.preventDefault());
+    cardEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (codeDragIdx === null || codeDragIdx === i) return;
+      const [m] = code.agents.splice(codeDragIdx, 1);
+      code.agents.splice(i, 0, m);
+      codeDragIdx = null;
+      saveCode();
+      renderCodeAgents();
+    });
+
+    const head = document.createElement("div");
+    head.className = "code-agent-head";
+    const handle = document.createElement("span");
+    handle.className = "geo-handle";
+    handle.textContent = "⠿";
+    const num = document.createElement("span");
+    num.className = "rt-num";
+    num.textContent = `${i + 1}.`;
+
+    const sel = document.createElement("select");
+    const list =
+      a.worker && !opts.some((o) => o.value === a.worker)
+        ? [...opts, { value: a.worker, label: `（已失效）${workerLabel(a.worker)}` }]
+        : opts;
+    fillSelect(sel, list, a.worker);
+    sel.addEventListener("change", () => {
+      a.worker = sel.value;
+      saveCode();
+    });
+
+    const del = document.createElement("button");
+    del.className = "danger mini";
+    del.textContent = "✕";
+    del.addEventListener("click", () => {
+      code.agents.splice(i, 1);
+      saveCode();
+      renderCodeAgents();
+    });
+    head.append(handle, num, sel, del);
+
+    const duty = document.createElement("input");
+    duty.className = "code-agent-duty";
+    // Position-specific hint, so each row suggests a different job and an empty field
+    // still reads as "this slot = this duty" (which is what actually runs — see runCoding).
+    duty.placeholder = `职责（留空则按「${DUTY_SUGGEST[i] ?? "审查与完善"}」）`;
+    duty.value = a.duty;
+    duty.addEventListener("input", () => {
+      a.duty = duty.value;
+      saveCode();
+    });
+
+    // Skills: toggleable chips — click to attach/detach, pick as many as you want.
+    a.skills = a.skills.filter((n) => skills.some((s) => s.name === n)); // drop deleted skills
+    const skillRow = document.createElement("div");
+    skillRow.className = "skill-chips";
+    const lab = document.createElement("span");
+    lab.className = "wfbar-label";
+    lab.textContent = "技能";
+    skillRow.appendChild(lab);
+    if (!skills.length) {
+      const none = document.createElement("span");
+      none.className = "chips-empty";
+      none.textContent = "（技能库为空，去左边「技能」新建）";
+      skillRow.appendChild(none);
+    }
+    for (const s of skills) {
+      const chip = document.createElement("button");
+      chip.className = "skill-chip" + (a.skills.includes(s.name) ? " active" : "");
+      chip.textContent = s.name;
+      chip.title = s.description || s.name;
+      chip.addEventListener("click", () => {
+        if (a.skills.includes(s.name)) a.skills = a.skills.filter((n) => n !== s.name);
+        else a.skills.push(s.name);
+        saveCode();
+        chip.classList.toggle("active");
+      });
+      skillRow.appendChild(chip);
+    }
+
+    cardEl.append(head, duty, skillRow);
+    wrap.appendChild(cardEl);
+  });
+}
+
+let dirCheckSeq = 0;
+async function validateCodeDir() {
+  const el = $("#code-dir-status");
+  const dir = code.dir.trim();
+  if (!dir) {
+    el.className = "test-status";
+    el.textContent = "";
+    return;
+  }
+  const seq = ++dirCheckSeq;
+  const ok = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
+  if (seq !== dirCheckSeq) return;
+  setTest(el, ok ? "ok" : "error", ok ? "✓ 文件夹存在" : "✗ 找不到这个文件夹");
+}
+
+function renderCode() {
+  $<HTMLInputElement>("#code-dir").value = code.dir;
+  $<HTMLTextAreaElement>("#code-task").value = code.task;
+  $<HTMLInputElement>("#code-role").value = code.role;
+  $<HTMLInputElement>("#code-auto").checked = code.auto;
+  renderCodeAgents();
+  validateCodeDir();
+}
+
+// 协作编程: give each agent its own LIVE interactive terminal (PTY), side by side, in
+// the same project folder. Seeded with its duty + the task + a TEAM_NOTES.md convention
+// so review/test agents leave feedback the implementer reads. You watch + type follow-ups.
+async function runCoding() {
+  const dir = code.dir.trim();
+  if (!dir) return toast("先填项目文件夹路径");
+  if (!code.task.trim()) return toast("先填任务 / 需求");
+  const agents = code.agents.filter((a) => codingProgram(a.worker));
+  if (!agents.length) return toast("至少加 1 个有效的 Agent");
+  const dirOk = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
+  if (!dirOk) return toast("项目文件夹不存在：" + dir);
+
+  // Effective skills per agent = its own + the default (left-library checked) skills.
+  const agentSkills = (a: CodeAgent) => [...new Set([...defaultSkills, ...a.skills])];
+  // Preload every needed skill's body once.
+  const bodies: Record<string, string> = {};
+  for (const a of agents) {
+    for (const sk of agentSkills(a)) {
+      if (!(sk in bodies)) {
+        try {
+          bodies[sk] = skillBody(await invoke<string>("read_skill", { name: sk }));
+        } catch {
+          bodies[sk] = "";
+        }
+      }
+    }
+  }
+
+  const task = code.task.trim();
+  const conv = code.role.trim() ? `团队约定：${code.role.trim()}\n` : "";
+  const notes =
+    "队友之间通过项目根目录的 TEAM_NOTES.md 互通：发现问题/给出反馈就追加写进 TEAM_NOTES.md（注明针对哪个文件、什么问题）；动手前先看一眼 TEAM_NOTES.md 有没有给你的反馈。";
+
+  // Move into the terminal panes and give each agent its own live terminal.
+  mode = "term";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+  resetPanes();
+
+  agents.forEach((a, i) => {
+    const program = codingProgram(a.worker);
+    if (!program) return;
+    const role = a.duty.trim() || DUTY_SUGGEST[i] || "实现";
+    const skillText = agentSkills(a)
+      .map((sk) => (bodies[sk] ?? "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+    const isImpl = i === 0 || role.includes("实现");
+    const prompt =
+      `${conv}你是多 Agent 协作小组的一员，负责：${role}。我们共用当前这个项目文件夹。\n\n` +
+      `总任务：\n${task}\n\n` +
+      (skillText ? `${skillText}\n\n` : "") +
+      `${notes}\n\n` +
+      (isImpl
+        ? "现在请先把基础实现做出来，直接改文件；做完简述你改了什么。"
+        : "现在请查看当前代码和 TEAM_NOTES.md，围绕你的职责动手（审查/修 bug/补测试/重构）；把要给别人的反馈写进 TEAM_NOTES.md，并简述你改了什么。");
+    // One pane per agent (side by side) up to MAX_PANES; extra agents become tabs in the
+    // last pane. Each launches the CLI interactively (no -p) seeded with the prompt.
+    let pane: Pane;
+    if (i < MAX_PANES) pane = addPane();
+    else {
+      pane = panes[panes.length - 1];
+      pane.addTab(dir);
+    }
+    const spec = CLI_LAUNCH[program];
+    const auto = code.auto && spec ? spec.auto : [];
+    // Only auto-confirm the startup dialog when its triggering flag (auto) is on.
+    const accept = code.auto ? spec?.accept : undefined;
+    if (spec && !spec.promptArg) {
+      // CLI won't take a positional prompt (grok) — launch bare + type it into stdin.
+      pane.active!.launch(program, auto, dir, prompt, accept);
+    } else {
+      pane.active!.launch(program, [...auto, prompt], dir, undefined, accept);
+    }
+  });
+}
+
+// ---- 终端 mode (embedded xterm + PTY, ported from clink: split panes + tabs + launcher) ----
+const termPanel = $<HTMLElement>("#term-panel");
+const panesEl = () => $<HTMLDivElement>("#panes");
+const panes: Pane[] = [];
+let paneSeq = 0;
+let termSeq = 0;
+let sessionSeq = 0;
+let activePane: Pane | null = null;
+const MAX_PANES = 3;
+
+function escHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
+}
+function shortCwd(cwd: string): string {
+  if (!cwd) return "";
+  return cwd.startsWith("/Users/") ? "~/" + cwd.split("/").slice(3).join("/") : cwd;
+}
+
+// One terminal session (a tab). Shows a launcher until a program is started.
+class Term {
+  id = `t${++termSeq}`;
+  host: HTMLElement;
+  term: Terminal | null = null;
+  fit: FitAddon | null = null;
+  sessionId: string | null = null;
+  cwd = "~";
+  program = "";
+  title = "";
+  launched = false; // true once a program has been started (a plain shell counts)
+  private unlisten: UnlistenFn | null = null;
+  private ro: ResizeObserver | null = null;
+  private refitRaf = 0;
+
+  constructor(
+    public pane: Pane,
+    private initialCwd = "~",
+  ) {
+    this.host = document.createElement("div");
+    this.host.className = "term-host";
+    this.showLauncher();
+  }
+
+  private showLauncher() {
+    // No skill picker here — skills are called anytime during the session via the pane's
+    // ⚡技能 button (write_pty into the running CLI), which is the better workflow.
+    this.host.innerHTML = `
+      <div class="launcher">
+        <div class="launch-row"><label>目录</label><input class="cwd" value="~" /><button class="pick-cwd" type="button">选择</button></div>
+        <div class="launch-row"><label>参数</label><input class="args" placeholder="可选，传给程序的参数" /></div>
+        <div class="launch-btns">
+          <button data-prog="">▶ 终端</button>
+          <button data-prog="claude">▶ Claude</button>
+          <button data-prog="codex">▶ Codex</button>
+          <button data-prog="grok">▶ Grok</button>
+        </div>
+      </div>`;
+    const cwdInput = this.host.querySelector(".cwd") as HTMLInputElement;
+    cwdInput.value = this.initialCwd;
+    this.host.querySelector(".pick-cwd")!.addEventListener("click", async () => {
+      const dir = await invoke<string | null>("pick_folder").catch(() => null);
+      if (dir) cwdInput.value = dir;
+    });
+    this.host.querySelectorAll<HTMLButtonElement>(".launch-btns button").forEach((b) =>
+      b.addEventListener("click", () => {
+        const cwd = cwdInput.value || "~";
+        const argStr = (this.host.querySelector(".args") as HTMLInputElement).value.trim();
+        this.launch(b.dataset.prog ?? "", argStr ? argStr.split(/\s+/) : [], cwd);
+      }),
+    );
+  }
+
+  async launch(program: string, args: string[], cwd: string, seed?: string, accept?: string) {
+    this.teardown();
+    this.host.innerHTML = "";
+    const term = new Terminal({
+      fontFamily: "Menlo, Monaco, monospace",
+      fontSize: 13,
+      cursorBlink: true,
+      scrollback: 5000,
+      macOptionClickForcesSelection: true,
+      theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(this.host);
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      /* no WebGL — default renderer */
+    }
+    try {
+      fit.fit();
+    } catch {
+      /* not laid out yet */
+    }
+    this.term = term;
+    this.fit = fit;
+    const sid = `s${++sessionSeq}`;
+    this.sessionId = sid;
+    this.cwd = cwd;
+    this.program = program;
+    this.launched = true;
+    this.title = `${program || "shell"} · ${shortCwd(cwd) || cwd}`;
+    this.pane.renderTabs();
+
+    // Watch the stream for a startup confirm dialog (claude's "Yes, I accept") and, once
+    // it actually renders, select option 2 (Down then Enter). Doing it on detection — not
+    // a blind timer — avoids the keystroke landing before the menu (which picked "No, exit").
+    let acceptDone = !accept;
+    let acceptBuf = "";
+    const onData = new Channel<ArrayBuffer>();
+    onData.onmessage = (msg) => {
+      const bytes = new Uint8Array(msg);
+      if (this.term) this.term.write(bytes);
+      if (!acceptDone) {
+        acceptBuf = (acceptBuf + new TextDecoder().decode(bytes)).slice(-6000);
+        // The menu's words get split by cursor-move escapes, so match the contiguous tokens
+        // "confirm" (Enter to confirm) + "exit" (1. No, exit) — both present = menu is up.
+        if (/confirm/i.test(acceptBuf) && /exit/i.test(acceptBuf)) {
+          acceptDone = true;
+          setTimeout(() => invoke("write_pty", { id: sid, data: "\x1b[B" }).catch(() => {}), 300);
+          setTimeout(() => invoke("write_pty", { id: sid, data: "\r" }).catch(() => {}), 650);
+        }
+      }
+    };
+    this.unlisten = await listen(`pty:exit:${sid}`, () => {
+      term.writeln("\r\n\x1b[90m[进程已退出]\x1b[0m");
+      if (this.sessionId === sid) this.sessionId = null;
+    });
+    try {
+      await invoke("spawn_pty", { id: sid, program, args, cwd, cols: term.cols, rows: term.rows, onData });
+    } catch (err) {
+      if (this.sessionId === sid) this.sessionId = null;
+      term.writeln(`\x1b[31m启动失败：${err instanceof Error ? err.message : String(err)}\x1b[0m`);
+      return;
+    }
+    term.onData((d) => invoke("write_pty", { id: sid, data: d }).catch(() => {}));
+
+    // Seed a prompt by typing it into the CLI's stdin (for CLIs that don't take a
+    // positional prompt, e.g. grok). Collapse newlines to one line so a TUI input box
+    // doesn't submit early; wait a beat for the TUI to be ready, then send + Enter.
+    if (seed) {
+      const oneLine = seed.replace(/\s*\n+\s*/g, " ").trim();
+      setTimeout(() => invoke("write_pty", { id: sid, data: oneLine + "\r" }).catch(() => {}), 1400);
+    }
+    // ⌘C copies selection (Ctrl+C still sends SIGINT), ⌘V pastes, ⌘K clears.
+    let lastSel = "";
+    term.onSelectionChange(() => {
+      const s = term.getSelection();
+      if (s) lastSel = s;
+    });
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown" || !e.metaKey) return true;
+      if (e.key === "k") {
+        term.clear();
+        return false;
+      }
+      if (e.key === "c") {
+        const s = term.getSelection() || lastSel;
+        if (!s) return true;
+        navigator.clipboard.writeText(s).catch(() => {});
+        return false;
+      }
+      if (e.key === "v") {
+        navigator.clipboard
+          .readText()
+          .then((t) => t && term.paste(t))
+          .catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
+    this.ro = new ResizeObserver(() => this.refit());
+    this.ro.observe(this.host);
+    this.pane.setActiveTerm(this);
+  }
+
+  refit() {
+    if (this.refitRaf) return;
+    this.refitRaf = requestAnimationFrame(() => {
+      this.refitRaf = 0;
+      if (!this.term || !this.fit) return;
+      if (this.host.clientWidth === 0 || this.host.clientHeight === 0) return;
+      try {
+        this.fit.fit();
+      } catch {
+        /* not laid out yet */
+      }
+      if (this.sessionId)
+        invoke("resize_pty", { id: this.sessionId, cols: this.term.cols, rows: this.term.rows }).catch(() => {});
+    });
+  }
+
+  teardown() {
+    if (this.refitRaf) cancelAnimationFrame(this.refitRaf);
+    this.refitRaf = 0;
+    this.ro?.disconnect();
+    this.ro = null;
+    this.unlisten?.();
+    this.unlisten = null;
+    if (this.sessionId) invoke("close_pty", { id: this.sessionId }).catch(() => {});
+    this.sessionId = null;
+    this.term?.dispose();
+    this.term = null;
+    this.fit = null;
+  }
+}
+
+// A column: a tab strip + the active tab's body. Holds one or more Terms.
+class Pane {
+  id = `pane-${++paneSeq}`;
+  root: HTMLElement;
+  tabsEl: HTMLElement;
+  bodyEl: HTMLElement;
+  grow = 1;
+  tabs: Term[] = [];
+  active: Term | null = null;
+
+  constructor() {
+    this.root = document.createElement("div");
+    this.root.className = "pane";
+    this.root.innerHTML = `<div class="pane-tabs"></div><div class="pane-body"></div>`;
+    this.tabsEl = this.root.querySelector(".pane-tabs")!;
+    this.bodyEl = this.root.querySelector(".pane-body")!;
+    this.root.addEventListener("mousedown", () => setActivePane(this), true);
+    this.addTab();
+  }
+
+  addTab(initialCwd = "~"): Term {
+    const t = new Term(this, initialCwd);
+    this.tabs.push(t);
+    this.bodyEl.appendChild(t.host);
+    this.setActiveTerm(t);
+    return t;
+  }
+
+  closeTab(t: Term) {
+    t.teardown();
+    t.host.remove();
+    const i = this.tabs.indexOf(t);
+    if (i < 0) return;
+    this.tabs.splice(i, 1);
+    if (this.tabs.length === 0) {
+      if (panes.length > 1) {
+        removePane(this);
+        return;
+      }
+      this.addTab(); // keep at least one tab in the last column
+      return;
+    }
+    if (this.active === t) this.setActiveTerm(this.tabs[Math.max(0, i - 1)]);
+    else this.renderTabs();
+  }
+
+  // All tab hosts stay mounted; switching only toggles visibility, so the active
+  // terminal's canvas is never blanked.
+  setActiveTerm(t: Term) {
+    this.active = t;
+    this.tabs.forEach((tm) => tm.host.classList.toggle("term-host--hidden", tm !== t));
+    this.renderTabs();
+    setActivePane(this);
+    t.refit();
+    t.term?.focus();
+  }
+
+  renderTabs() {
+    this.tabsEl.innerHTML = "";
+    for (const tm of this.tabs) {
+      const label = tm.launched ? tm.title : "新终端";
+      const chip = document.createElement("div");
+      chip.className = "tab" + (tm === this.active ? " active" : "");
+      chip.innerHTML = `<span class="tab-title">${escHtml(label)}</span><button class="tab-close" title="关闭">✕</button>`;
+      chip.addEventListener("click", () => this.setActiveTerm(tm));
+      chip.querySelector(".tab-close")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeTab(tm);
+      });
+      this.tabsEl.appendChild(chip);
+    }
+    const add = document.createElement("button");
+    add.className = "tab-add";
+    add.textContent = "+";
+    add.title = "新标签页";
+    add.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.addTab(this.active?.cwd); // new tab inherits the active tab's cwd
+    });
+    this.tabsEl.appendChild(add);
+    // ⚡ send a skill into the active terminal's running CLI — anytime, mid-conversation.
+    const sk = document.createElement("button");
+    sk.className = "tab-add";
+    sk.textContent = "⚡技能";
+    sk.title = "发送一个技能给当前终端里的 CLI";
+    sk.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTermSkillPicker(this.active);
+    });
+    this.tabsEl.appendChild(sk);
+  }
+
+  refit() {
+    this.active?.refit();
+  }
+}
+
+function setActivePane(p: Pane) {
+  activePane = p;
+  panes.forEach((pp) => pp.root.classList.toggle("active", pp === p));
+}
+function addPane(): Pane {
+  const p = new Pane();
+  panes.push(p);
+  setActivePane(p);
+  layoutPanes();
+  return p;
+}
+// Tear down every pane/terminal and clear the area (used by 协作编程 before launching
+// one fresh terminal per agent).
+function resetPanes() {
+  panes.forEach((p) => p.tabs.forEach((t) => t.teardown()));
+  panes.length = 0;
+  activePane = null;
+  panesEl().replaceChildren();
+}
+function removePane(p: Pane) {
+  p.tabs.forEach((t) => t.teardown());
+  panes.splice(panes.indexOf(p), 1);
+  if (panes.length === 0) {
+    addPane();
+    return;
+  }
+  if (activePane === p) setActivePane(panes[0]);
+  layoutPanes();
+}
+// Rebuild #panes with draggable dividers; re-appending a pane node only moves it, so
+// the live terminals inside are preserved.
+function layoutPanes() {
+  const el = panesEl();
+  el.replaceChildren();
+  panes.forEach((p, i) => {
+    p.root.style.flex = `${p.grow} 1 0`;
+    el.appendChild(p.root);
+    if (i < panes.length - 1) el.appendChild(makeDivider(panes[i], panes[i + 1]));
+  });
+  refitAllPanes();
+}
+// Add one column, up to MAX_PANES; at the cap this is a no-op (so an accidental extra
+// click on 终端 can't collapse your panes). Reduce by closing a pane's last tab.
+function addPaneCapped() {
+  if (panes.length < MAX_PANES) addPane();
+}
+function makeDivider(a: Pane, b: Pane): HTMLElement {
+  const d = document.createElement("div");
+  d.className = "divider";
+  d.addEventListener("mousedown", (e) => startPaneDrag(e, a, b));
+  return d;
+}
+function startPaneDrag(e: MouseEvent, a: Pane, b: Pane) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const wA = a.root.offsetWidth;
+  const totalW = wA + b.root.offsetWidth;
+  const totalGrow = a.grow + b.grow;
+  const perPx = totalGrow / totalW;
+  const minGrow = 140 * perPx;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  let raf = 0;
+  const onMove = (ev: MouseEvent) => {
+    const newA = Math.max(minGrow, Math.min(totalGrow - minGrow, (wA + ev.clientX - startX) * perPx));
+    a.grow = newA;
+    b.grow = totalGrow - newA;
+    a.root.style.flex = `${a.grow} 1 0`;
+    b.root.style.flex = `${b.grow} 1 0`;
+    if (!raf)
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        a.refit();
+        b.refit();
+      });
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    a.refit();
+    b.refit();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+function refitAllPanes() {
+  panes.forEach((p) => p.refit());
+}
+
+// ---- 终端技能选择器：随时把一个技能正文作为一条消息发给运行中的 CLI ----
+const termSkillModal = $<HTMLDivElement>("#term-skill-modal");
+let termSkillTarget: Term | null = null;
+let termSkillSearch = "";
+function openTermSkillPicker(t: Term | null) {
+  if (!t || !t.sessionId) return toast("这个终端还没启动 CLI，先点 ▶ 起一个");
+  termSkillTarget = t;
+  termSkillSearch = "";
+  $<HTMLInputElement>("#term-skill-search").value = "";
+  renderTermSkillList();
+  termSkillModal.classList.remove("hidden");
+  $<HTMLInputElement>("#term-skill-search").focus();
+}
+function renderTermSkillList() {
+  const listEl = $<HTMLDivElement>("#term-skill-list");
+  listEl.innerHTML = "";
+  const q = termSkillSearch.trim().toLowerCase();
+  const items = skills.filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+  if (!items.length) {
+    const e = document.createElement("div");
+    e.className = "sidebar-note";
+    e.textContent = skills.length ? "没有匹配的技能。" : "技能库为空，去左边「技能」新建。";
+    listEl.appendChild(e);
+    return;
+  }
+  for (const s of items) {
+    const row = document.createElement("div");
+    row.className = "tsk-item";
+    const nm = document.createElement("div");
+    nm.className = "tsk-name";
+    nm.textContent = s.name;
+    const desc = document.createElement("div");
+    desc.className = "tsk-desc";
+    desc.textContent = s.description || "（无描述）";
+    row.append(nm, desc);
+    row.addEventListener("click", async () => {
+      const t = termSkillTarget;
+      if (!t || !t.sessionId) {
+        termSkillModal.classList.add("hidden");
+        return toast("终端已关闭");
+      }
+      try {
+        const body = skillBody(await invoke<string>("read_skill", { name: s.name }));
+        const oneLine = body.replace(/\s*\n+\s*/g, " ").trim();
+        if (oneLine) await invoke("write_pty", { id: t.sessionId, data: oneLine + "\r" });
+        termSkillModal.classList.add("hidden");
+        toast(`已发送技能「${s.name}」给终端`, "info");
+      } catch (e) {
+        toast("发送失败：" + (e instanceof Error ? e.message : String(e)));
+      }
+    });
+    listEl.appendChild(row);
+  }
+}
+
+function applyMode() {
+  const m = mode;
+  const isTerm = m === "term";
+  geoEditor.classList.toggle("hidden", m !== "geo");
+  pipeEditor.classList.toggle("hidden", m !== "pipe");
+  rtEditor.classList.toggle("hidden", m !== "rt");
+  codeEditor.classList.toggle("hidden", m !== "code");
+  termPanel.classList.toggle("hidden", !isTerm);
+  // 终端 mode takes the whole area: hide the results column + its splitter.
+  (document.querySelector(".results") as HTMLElement).classList.toggle("hidden", isTerm);
+  $("#col-splitter").classList.toggle("hidden", isTerm);
+  $("#add-step").classList.toggle("hidden", m !== "pipe");
+  wfbar.classList.toggle("hidden", m !== "pipe");
+  $("#mode-pipe").classList.toggle("active", m === "pipe");
+  $("#mode-geo").classList.toggle("active", m === "geo");
+  $("#mode-rt").classList.toggle("active", m === "rt");
+  $("#mode-code").classList.toggle("active", m === "code");
+  $("#mode-term").classList.toggle("active", isTerm);
+  // 终端 has no run/stop (terminals are live + independent); hide those buttons there.
+  runBtn.classList.toggle("hidden", isTerm);
+  stopBtn.classList.toggle("hidden", isTerm || !running);
+  document.getElementById("geo-empty-hint")?.remove();
+  renderSkills(); // click behavior + highlight differ per mode
+  if (m === "code") renderCode();
+  else if (m === "geo") renderGeo();
+  else if (m === "rt") renderRt();
+  else if (isTerm) {
+    // First entry creates a pane; later entries refit (panes were display:none while away).
+    if (!panes.length) addPane();
+    else refitAllPanes();
+  }
+  // Per-mode empty-state hint (pipe has its own inline ref-hint, so no entry here).
+  const hint = EMPTY_HINTS[m];
+  if (hint && !resultsEl.children.length) {
+    const el = document.createElement("div");
+    el.id = "geo-empty-hint";
+    el.className = "empty";
+    el.textContent = hint;
+    resultsEl.appendChild(el);
+  }
+}
+const EMPTY_HINTS: Record<string, string> = {
+  code: "填好项目文件夹、任务、加 ≥1 个本地 CLI Agent，点「运行」→ 切到终端，每个 Agent 各开一个实时终端、并排干活。",
+  geo: "填好左侧表单（标题 / 原文 / 链接 / 路线 任一即可），点「运行」生成结构文 + 小推文。",
+  rt: "填好问题、加 ≥2 个参与模型、选一个主持人，点「运行」开始多模型接力讨论。",
+};
+
 // ---- wire up ----
-$("#toggle-skills").addEventListener("click", () => skillsPanel.classList.toggle("hidden"));
+$("#toggle-skills").addEventListener("click", () => {
+  const hidden = skillsPanel.classList.toggle("hidden");
+  $("#side-splitter").classList.toggle("hidden", hidden); // splitter follows the sidebar
+});
 $("#add-step").addEventListener("click", () => {
   steps.push({ title: "新步骤", worker: "", role: "", prompt: "{{prev}}" });
   saveSteps();
   renderSteps();
 });
-runBtn.addEventListener("click", () => (mode === "geo" ? runGeo() : run()));
+runBtn.addEventListener("click", () =>
+  mode === "geo" ? runGeo() : mode === "rt" ? runRoundtable() : mode === "code" ? runCoding() : run(),
+);
 stopBtn.addEventListener("click", () => {
   genId++; // invalidate the in-flight run so any pending await no-ops
   if (cancelCurrent) cancelCurrent();
@@ -2125,6 +3497,60 @@ stopBtn.addEventListener("click", () => {
   stopBtn.classList.add("hidden");
   runBtn.classList.remove("hidden");
 });
+
+// ---- draggable column splitters (widths persisted in localStorage) ----
+// `compute` turns the .main rect + cursor X into a new px width; `apply` sets it.
+function makeColumnSplitter(
+  splitterId: string,
+  lsKey: string,
+  compute: (rect: DOMRect, clientX: number) => number,
+  apply: (w: number) => void,
+) {
+  const splitter = $<HTMLDivElement>(splitterId);
+  const mainEl = document.querySelector(".main") as HTMLElement;
+  const saved = load<number>(lsKey, 0);
+  let current = saved;
+  if (saved > 0) apply(saved);
+  let dragging = false;
+  splitter.addEventListener("mousedown", (e) => {
+    dragging = true;
+    splitter.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    current = compute(mainEl.getBoundingClientRect(), e.clientX);
+    apply(current);
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("dragging");
+    document.body.style.userSelect = "";
+    localStorage.setItem(lsKey, String(Math.round(current)));
+  });
+}
+// editor ↔ results: drag sets the results column width (from the right edge).
+{
+  const resultsCol = document.querySelector(".results") as HTMLElement;
+  makeColumnSplitter(
+    "#col-splitter",
+    "council.resultsw",
+    (rect, x) => Math.max(280, Math.min(rect.right - x, rect.width - 380)),
+    (w) => {
+      resultsCol.style.flex = "none";
+      resultsCol.style.width = `${w}px`;
+    },
+  );
+}
+// 技能栏 ↔ editor: drag sets the sidebar width (from the left edge).
+makeColumnSplitter(
+  "#side-splitter",
+  "council.sidebarw",
+  (rect, x) => Math.max(200, Math.min(x - rect.left, 560)),
+  (w) => (skillsPanel.style.width = `${w}px`),
+);
 
 // mode toggle
 $("#mode-pipe").addEventListener("click", () => {
@@ -2136,6 +3562,124 @@ $("#mode-geo").addEventListener("click", () => {
   mode = "geo";
   localStorage.setItem(LS_MODE, mode);
   applyMode();
+});
+$("#mode-rt").addEventListener("click", () => {
+  mode = "rt";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+});
+
+// 圆桌 form fields
+$<HTMLTextAreaElement>("#rt-question").addEventListener("input", (e) => {
+  rt.question = (e.target as HTMLTextAreaElement).value;
+  saveRt();
+});
+$<HTMLInputElement>("#rt-role").addEventListener("input", (e) => {
+  rt.role = (e.target as HTMLInputElement).value;
+  saveRt();
+});
+$<HTMLInputElement>("#rt-rounds").addEventListener("input", (e) => {
+  rt.rounds = parseInt((e.target as HTMLInputElement).value, 10) || 2;
+  $("#rt-rounds-val").textContent = String(rt.rounds);
+  saveRt();
+});
+$<HTMLSelectElement>("#rt-moderator").addEventListener("change", (e) => {
+  rt.moderator = (e.target as HTMLSelectElement).value;
+  saveRt();
+});
+$("#rt-add").addEventListener("click", () => {
+  const opts = chatWorkerOptions();
+  if (!opts.length) return toast("还没有可用模型，先去「模型市场」加一个");
+  // Prefer a worker not already chosen, so each added row is visibly different.
+  const used = rt.participants.map((p) => p.worker);
+  const unused = opts.find((o) => !used.includes(o.value));
+  rt.participants.push({ worker: (unused ?? opts[0]).value, skill: "" });
+  saveRt();
+  renderRtParticipants();
+  // Confirm clearly + flash the new row and bring it into view.
+  const last = $<HTMLDivElement>("#rt-participants").lastElementChild as HTMLElement | null;
+  last?.classList.add("just-added");
+  last?.scrollIntoView({ block: "nearest" });
+  setTimeout(() => last?.classList.remove("just-added"), 1100);
+  toast(`已加入第 ${rt.participants.length} 位参与模型`, "info");
+});
+$("#mode-code").addEventListener("click", () => {
+  mode = "code";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+});
+$("#mode-term").addEventListener("click", () => {
+  // Already in 终端 → each extra click on the tab adds a column (1 → 2 → 3, capped).
+  if (mode === "term") {
+    addPaneCapped();
+    return;
+  }
+  mode = "term";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+});
+$("#term-skill-close").addEventListener("click", () => termSkillModal.classList.add("hidden"));
+$<HTMLInputElement>("#term-skill-search").addEventListener("input", (e) => {
+  termSkillSearch = (e.target as HTMLInputElement).value;
+  renderTermSkillList();
+});
+
+// 协作编程 form fields
+$<HTMLInputElement>("#code-dir").addEventListener("input", (e) => {
+  code.dir = (e.target as HTMLInputElement).value;
+  saveCode();
+  validateCodeDir();
+});
+$<HTMLTextAreaElement>("#code-task").addEventListener("input", (e) => {
+  code.task = (e.target as HTMLTextAreaElement).value;
+  saveCode();
+});
+$<HTMLInputElement>("#code-role").addEventListener("input", (e) => {
+  code.role = (e.target as HTMLInputElement).value;
+  saveCode();
+});
+$<HTMLInputElement>("#code-auto").addEventListener("change", (e) => {
+  code.auto = (e.target as HTMLInputElement).checked;
+  saveCode();
+});
+$("#code-add").addEventListener("click", () => {
+  const opts = codingAgentOptions();
+  if (!opts.length) return toast("没有可用的编程 CLI");
+  const used = code.agents.map((a) => a.worker);
+  const unused = opts.find((o) => !used.includes(o.value));
+  code.agents.push({ worker: (unused ?? opts[0]).value, duty: DUTY_SUGGEST[code.agents.length] ?? "", skills: [] });
+  saveCode();
+  renderCodeAgents();
+  const last = $<HTMLDivElement>("#code-agents").lastElementChild as HTMLElement | null;
+  last?.classList.add("just-added");
+  last?.scrollIntoView({ block: "nearest" });
+  setTimeout(() => last?.classList.remove("just-added"), 1100);
+  toast(`已加入第 ${code.agents.length} 个 Agent`, "info");
+});
+function setCodeDir(p: string) {
+  code.dir = p;
+  saveCode();
+  $<HTMLInputElement>("#code-dir").value = p;
+  validateCodeDir();
+}
+$("#code-pick").addEventListener("click", async () => {
+  try {
+    const p = await invoke<string | null>("pick_folder");
+    if (p) setCodeDir(p);
+  } catch (e) {
+    toast("打开文件夹失败：" + (e instanceof Error ? e.message : String(e)));
+  }
+});
+$("#code-new").addEventListener("click", async () => {
+  try {
+    const p = await invoke<string | null>("new_folder");
+    if (p) {
+      setCodeDir(p);
+      toast("已新建文件夹：" + p, "info");
+    }
+  } catch (e) {
+    toast("新建文件夹失败：" + (e instanceof Error ? e.message : String(e)));
+  }
 });
 
 // GEO 单篇 form fields
@@ -2190,8 +3734,32 @@ $("#open-market").addEventListener("click", () => {
 });
 $("#market-close").addEventListener("click", () => marketModal.classList.add("hidden"));
 
+$("#open-history").addEventListener("click", () => {
+  renderHistory();
+  historyModal.classList.remove("hidden");
+});
+$("#history-close").addEventListener("click", () => historyModal.classList.add("hidden"));
+$("#history-clear").addEventListener("click", () => {
+  history = [];
+  historyViewId = null;
+  saveHistoryLS();
+  renderHistory();
+});
+$("#history-copy").addEventListener("click", async () => {
+  const cur = history.find((h) => h.id === historyViewId);
+  if (!cur) return;
+  try {
+    await navigator.clipboard.writeText(cur.md);
+    toast("已复制本条", "info");
+  } catch {
+    /* clipboard blocked */
+  }
+});
+
 $("#wf-save").addEventListener("click", saveWorkflow);
-$("#wf-del").addEventListener("click", deleteWorkflow);
+// Two-step (not native confirm(), which is unreliable in the webview) to avoid an
+// accidental delete and a silent no-op.
+twoStepDelete($<HTMLButtonElement>("#wf-del"), "删除", "确认删除", () => void deleteWorkflow());
 $("#wf-new").addEventListener("click", () => {
   steps = [{ title: "步骤 1", worker: "", role: "", prompt: "{{input}}" }];
   inputEl.value = "";
@@ -2243,6 +3811,19 @@ $("#add-image").addEventListener("click", () => {
 
 $("#skill-new").addEventListener("click", () => openSkillEditor(null));
 $("#skill-cancel").addEventListener("click", () => skillModal.classList.add("hidden"));
+
+// 技能库大窗
+$("#skill-manage").addEventListener("click", openSkillsModal);
+$("#skills-close").addEventListener("click", () => skillsModal.classList.add("hidden"));
+$("#skl-new").addEventListener("click", () => openSkillEditor(null));
+$("#skl-sync").addEventListener("click", () => {
+  syncOutput.textContent = "";
+  syncModal.classList.remove("hidden");
+});
+$<HTMLInputElement>("#skl-search").addEventListener("input", (e) => {
+  sklSearch = (e.target as HTMLInputElement).value;
+  renderSkillsModal();
+});
 $("#skill-save").addEventListener("click", saveSkill);
 resetSkillDel = twoStepDelete($<HTMLButtonElement>("#skill-delete"), "删除", "再点删除", () => {
   if (editingSkill) {

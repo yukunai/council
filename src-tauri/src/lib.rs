@@ -1,9 +1,12 @@
 use futures_util::StreamExt;
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::Channel;
+use tauri::{AppHandle, Emitter, State};
 
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -20,6 +23,15 @@ enum StreamEvent {
     Video { url: String },
     Done,
     Error { message: String },
+}
+
+// Reuse one HTTP client across streaming calls so sequential pipeline steps to the same
+// provider can reuse connections. Only for commands on tauri's own async runtime —
+// video_generate runs on its own runtime and keeps a separate client, since a reqwest
+// client's connection pool is bound to the runtime it was first used on.
+fn http_client() -> &'static reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    C.get_or_init(reqwest::Client::new)
 }
 
 // Stream a chat completion from any OpenAI-compatible endpoint (DeepSeek today;
@@ -41,7 +53,7 @@ async fn chat_stream(
         "stream": true,
     });
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = match client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -388,21 +400,58 @@ fn resolve_program(program: &str) -> String {
     program.to_string()
 }
 
+fn expand_home_path(path: &str) -> String {
+    let p = path.trim();
+    if p == "~" {
+        return std::env::var("HOME").unwrap_or_default();
+    }
+    if let Some(rest) = p.strip_prefix("~/") {
+        return Path::new(&std::env::var("HOME").unwrap_or_default())
+            .join(rest)
+            .to_string_lossy()
+            .to_string();
+    }
+    p.to_string()
+}
+
 // Run a local CLI agent headless and stream its stdout. The prompt is passed as the
 // final argument (e.g. `claude -p <prompt>`, `codex exec <prompt>`), so any CLI that
 // takes a one-shot prompt works — the user configures program + fixed args.
-// Sync commands run on the main thread, so do the blocking work in a spawned thread
-// and return immediately — the Channel keeps streaming from there.
+// `cwd` (optional) runs the agent inside a project folder, so several agents can edit
+// the same codebase (协作编程 mode). Sync commands run on the main thread, so do the
+// blocking work in a spawned thread and return immediately — the Channel streams on.
 #[tauri::command]
-fn cli_run(program: String, args: Vec<String>, prompt: String, on_event: Channel<StreamEvent>) {
+fn cli_run(
+    program: String,
+    args: Vec<String>,
+    prompt: String,
+    cwd: Option<String>,
+    on_event: Channel<StreamEvent>,
+) {
     use std::process::{Command, Stdio};
 
     std::thread::spawn(move || {
+        let cwd = cwd
+            .as_deref()
+            .filter(|d| !d.trim().is_empty())
+            .map(expand_home_path);
+        // If a working dir was given, it must exist — else the agent edits the wrong place.
+        if let Some(dir) = cwd.as_deref() {
+            if !Path::new(dir).is_dir() {
+                let _ = on_event.send(StreamEvent::Error {
+                    message: format!("项目文件夹不存在：{dir}"),
+                });
+                return;
+            }
+        }
         let mut cmd = Command::new(resolve_program(&program));
         for a in &args {
             cmd.arg(a);
         }
         cmd.arg(&prompt);
+        if let Some(dir) = cwd.as_deref() {
+            cmd.current_dir(dir);
+        }
         let mut child = match cmd
             .env("PATH", full_path())
             .stdin(Stdio::null())
@@ -460,6 +509,159 @@ fn cli_run(program: String, args: Vec<String>, prompt: String, on_event: Channel
             }
         }
     });
+}
+
+// ---- embedded terminals (终端 panel): interactive shells via a pseudo-terminal ----
+struct PtySession {
+    writer: Box<dyn Write + Send>,
+    master: Box<dyn MasterPty + Send>,
+}
+#[derive(Default)]
+struct Ptys(Arc<Mutex<HashMap<String, PtySession>>>);
+
+// Spawn a PTY running `program` (empty = the user's login $SHELL) in `cwd`, streaming
+// raw output bytes to the frontend over a binary Channel. Ported from clink.
+#[tauri::command]
+fn spawn_pty(
+    app: AppHandle,
+    ptys: State<Ptys>,
+    id: String,
+    program: String,
+    args: Vec<String>,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    on_data: Channel<tauri::ipc::Response>,
+) -> Result<(), String> {
+    let pair = native_pty_system()
+        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| e.to_string())?;
+
+    let prog = if program.trim().is_empty() {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    } else {
+        resolve_program(&program)
+    };
+    let mut cmd = CommandBuilder::new(prog);
+    for a in &args {
+        cmd.arg(a);
+    }
+    cmd.cwd(if cwd.trim().is_empty() {
+        std::env::var("HOME").unwrap_or_default()
+    } else {
+        expand_home_path(&cwd)
+    });
+    // Inherit the real login PATH (so node/claude/etc. resolve) + a sane TERM for TUIs.
+    cmd.env("PATH", full_path());
+    cmd.env("TERM", "xterm-256color");
+
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    let map = ptys.0.clone();
+    map.lock().unwrap().insert(id.clone(), PtySession { writer, master: pair.master });
+
+    // Reader thread: stream raw bytes (binary, no UTF-8 decode — a multi-byte char can
+    // straddle a read boundary). On EOF, drop the session and notify the frontend.
+    let id_out = id;
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 65536];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let _ = on_data.send(tauri::ipc::Response::new(buf[..n].to_vec()));
+                }
+            }
+        }
+        map.lock().unwrap().remove(&id_out);
+        let _ = app.emit(&format!("pty:exit:{id_out}"), ());
+    });
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn write_pty(ptys: State<Ptys>, id: String, data: String) -> Result<(), String> {
+    if let Some(s) = ptys.0.lock().unwrap().get_mut(&id) {
+        s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        s.writer.flush().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_pty(ptys: State<Ptys>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    if let Some(s) = ptys.0.lock().unwrap().get(&id) {
+        s.master
+            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn close_pty(ptys: State<Ptys>, id: String) {
+    // Dropping the master closes the PTY; the child receives SIGHUP.
+    ptys.0.lock().unwrap().remove(&id);
+}
+
+// Is this path an existing directory? Lets 协作编程 confirm the project folder before
+// turning agents loose on it. `~` is expanded to $HOME.
+#[tauri::command]
+fn dir_exists(path: String) -> bool {
+    if path.trim().is_empty() {
+        return false;
+    }
+    let expanded = expand_home_path(&path);
+    Path::new(&expanded).is_dir()
+}
+
+// Native macOS folder picker via osascript (no extra dependency / dialog plugin). The
+// system dialog itself has a "New Folder" button, so this covers pick + create-in-place.
+// Returns None if the user cancels.
+#[tauri::command]
+fn pick_folder() -> Result<Option<String>, String> {
+    let script = r#"set p to ""
+try
+	set p to POSIX path of (choose folder with prompt "选择项目文件夹")
+end try
+p"#;
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if path.is_empty() { None } else { Some(path) })
+}
+
+// Pick a parent folder + type a name, then create that folder. Returns the new path
+// (None if cancelled). Also via osascript so no dialog-plugin dependency.
+#[tauri::command]
+fn new_folder() -> Result<Option<String>, String> {
+    let script = r#"set p to ""
+try
+	set parentDir to POSIX path of (choose folder with prompt "新文件夹放在哪个目录下")
+	set folderName to text returned of (display dialog "新文件夹名称：" default answer "new-project")
+	set p to parentDir & folderName
+end try
+p"#;
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(Some(path))
 }
 
 // ---- workflow files: saved as ~/.council/workflows/<name>.json ----
@@ -527,9 +729,10 @@ fn skills_dir() -> std::path::PathBuf {
     Path::new(&home).join(".council/skills")
 }
 
-fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, Option<String>) {
     let mut name = None;
     let mut desc = None;
+    let mut category = None;
     let trimmed = content.trim_start();
     if let Some(rest) = trimmed.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
@@ -539,17 +742,53 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
                     name = Some(v.trim().trim_matches(['"', '\'']).to_string());
                 } else if let Some(v) = line.strip_prefix("description:") {
                     desc = Some(v.trim().trim_matches(['"', '\'']).to_string());
+                } else if let Some(v) = line.strip_prefix("category:") {
+                    category = Some(v.trim().trim_matches(['"', '\'']).to_string());
                 }
             }
         }
     }
-    (name, desc)
+    (name, desc, category)
+}
+
+fn skill_display_name(dir: &Path) -> Option<String> {
+    let md = dir.join("SKILL.md");
+    if !md.is_file() {
+        return None;
+    }
+    let folder = dir.file_name()?.to_string_lossy().to_string();
+    let (name, _, _) = std::fs::read_to_string(md)
+        .map(|c| parse_frontmatter(&c))
+        .unwrap_or((None, None, None));
+    Some(name.filter(|s| !s.is_empty()).unwrap_or(folder))
+}
+
+fn resolve_skill_dir(name: &str) -> Result<std::path::PathBuf, String> {
+    let n = safe_name(name)?;
+    let root = skills_dir();
+    let exact = root.join(&n);
+    if exact.join("SKILL.md").is_file() {
+        return Ok(exact);
+    }
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for e in entries.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            if skill_display_name(&dir).as_deref() == Some(&n) {
+                return Ok(dir);
+            }
+        }
+    }
+    Err(format!("找不到技能：{n}"))
 }
 
 #[derive(Serialize)]
 struct SkillInfo {
     name: String,
     description: String,
+    category: String,
 }
 
 #[tauri::command]
@@ -558,17 +797,16 @@ fn list_skills() -> Vec<SkillInfo> {
     if let Ok(entries) = std::fs::read_dir(skills_dir()) {
         for e in entries.flatten() {
             let dir = e.path();
-            let md = dir.join("SKILL.md");
-            if !md.is_file() {
+            let Some(name) = skill_display_name(&dir) else {
                 continue;
-            }
-            let folder = dir.file_name().unwrap().to_string_lossy().to_string();
-            let (n, d) = std::fs::read_to_string(&md)
+            };
+            let (_, d, c) = std::fs::read_to_string(dir.join("SKILL.md"))
                 .map(|c| parse_frontmatter(&c))
-                .unwrap_or((None, None));
+                .unwrap_or((None, None, None));
             out.push(SkillInfo {
-                name: n.filter(|s| !s.is_empty()).unwrap_or(folder),
+                name,
                 description: d.unwrap_or_default(),
+                category: c.unwrap_or_default(),
             });
         }
     }
@@ -578,22 +816,21 @@ fn list_skills() -> Vec<SkillInfo> {
 
 #[tauri::command]
 fn read_skill(name: String) -> Result<String, String> {
-    let n = safe_name(&name)?;
-    let path = skills_dir().join(&n).join("SKILL.md");
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    std::fs::read_to_string(resolve_skill_dir(&name)?.join("SKILL.md")).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn save_skill(name: String, description: String, body: String) -> Result<(), String> {
+fn save_skill(name: String, description: String, category: String, body: String) -> Result<(), String> {
     let n = safe_name(&name)?;
     let dir = skills_dir().join(&n);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    // Keep frontmatter one-line-safe: collapse newlines in name/description.
+    // Keep frontmatter one-line-safe: collapse newlines in name/description/category.
     let one = |s: &str| s.replace(['\n', '\r'], " ");
     let content = format!(
-        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        "---\nname: {}\ndescription: {}\ncategory: {}\n---\n\n{}\n",
         one(&n),
         one(&description),
+        one(&category),
         body
     );
     std::fs::write(dir.join("SKILL.md"), content).map_err(|e| e.to_string())
@@ -601,8 +838,7 @@ fn save_skill(name: String, description: String, body: String) -> Result<(), Str
 
 #[tauri::command]
 fn delete_skill(name: String) -> Result<(), String> {
-    let n = safe_name(&name)?;
-    std::fs::remove_dir_all(skills_dir().join(&n)).map_err(|e| e.to_string())
+    std::fs::remove_dir_all(resolve_skill_dir(&name)?).map_err(|e| e.to_string())
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -807,9 +1043,17 @@ fn skills_upload(url: String, message: String, on_event: Channel<StreamEvent>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Ptys::default())
         .invoke_handler(tauri::generate_handler![
             chat_stream,
             cli_run,
+            spawn_pty,
+            write_pty,
+            resize_pty,
+            close_pty,
+            dir_exists,
+            pick_folder,
+            new_folder,
             fetch_url,
             image_generate,
             video_generate,
@@ -826,4 +1070,70 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ---- unit tests (补测试 responsibility) ----
+// These cover the pure / deterministic helpers that power the Tauri commands.
+// Run with: cargo test (from src-tauri/)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_name_rejects_bad_chars() {
+        assert!(safe_name("").is_err());
+        assert!(safe_name("a/b").is_err());
+        assert!(safe_name("..").is_err());
+        assert!(safe_name("ok-name_123").is_ok());
+    }
+
+    #[test]
+    fn parse_frontmatter_extracts_fields() {
+        let md = r#"---
+name: my-skill
+description: "Does the thing"
+category: writing
+---
+body here
+"#;
+        let (n, d, c) = parse_frontmatter(md);
+        assert_eq!(n.as_deref(), Some("my-skill"));
+        assert_eq!(d.as_deref(), Some("Does the thing"));
+        assert_eq!(c.as_deref(), Some("writing"));
+    }
+
+    #[test]
+    fn parse_frontmatter_handles_no_frontmatter() {
+        let (n, d, c) = parse_frontmatter("just body");
+        assert!(n.is_none() && d.is_none() && c.is_none());
+    }
+
+    #[test]
+    fn html_to_text_strips_scripts_and_tags() {
+        let html = r#"<html><head><title>t</title></head><body><script>bad()</script><p>Hello <b>world</b> &amp; <i>you</i></p></body></html>"#;
+        let out = html_to_text(html);
+        assert!(out.contains("Hello"));
+        assert!(out.contains("world"));
+        assert!(!out.contains("bad()"));
+        assert!(!out.contains("<"));
+    }
+
+    #[test]
+    fn html_to_text_caps_huge_input() {
+        let big = "x".repeat(600_000);
+        let out = html_to_text(&big);
+        assert!(out.len() < 500_100);
+    }
+
+    #[test]
+    fn expand_home_path_variants() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(expand_home_path("~"), home);
+        if !home.is_empty() {
+            let p = expand_home_path("~/foo/bar");
+            assert!(p.starts_with(&home));
+            assert!(p.ends_with("foo/bar"));
+        }
+        assert_eq!(expand_home_path("/abs/path"), "/abs/path");
+    }
 }

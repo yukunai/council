@@ -28,11 +28,15 @@
         <span class="seg">
           <button id="mode-pipe" class="seg-btn active">流水线</button>
           <button id="mode-geo" class="seg-btn">单篇</button>
+          <button id="mode-rt" class="seg-btn">圆桌</button>
+          <button id="mode-code" class="seg-btn">协作编程</button>
+          <button id="mode-term" class="seg-btn">终端</button>
         </span>
         <button id="toggle-skills">技能</button>
         <button id="add-step">＋ 步骤</button>
         <button id="open-market">模型市场</button>
         <button id="open-settings">厂商 / 命令 / Key</button>
+        <button id="open-history">历史</button>
         <span class="grow"></span>
         <button id="run-btn" class="primary">▶ 运行</button>
         <button id="stop-btn" class="hidden">■ 停止</button>
@@ -52,12 +56,14 @@
           <div class="sidebar-head">
             <span>技能库</span>
             <span class="grow"></span>
+            <button id="skill-manage" title="打开技能库大窗口，按分类浏览">⛶ 全部</button>
             <button id="skill-new">＋ 新建</button>
             <button id="skill-sync">⇄ 仓库</button>
           </div>
           <div class="sidebar-note">SKILL.md 技能，挂到步骤上会作为该步的系统提示。</div>
           <div id="skills-list"></div>
         </aside>
+        <div id="side-splitter" class="splitter hidden" title="拖动调整技能栏宽度"></div>
 
         <section id="pipe-editor" class="editor">
           <label class="field-label" for="pipe-input">输入（用 <code>{{input}}</code> 引用）</label>
@@ -120,6 +126,74 @@
           </div>
         </section>
 
+        <section id="rt-editor" class="editor hidden">
+          <label class="field-label" for="rt-question">问题 / 议题</label>
+          <textarea id="rt-question" class="input-box" rows="3" placeholder="想让几个模型一起讨论的问题，比如：我这个桌面应用该用 Tauri 还是 Electron？为什么？"></textarea>
+
+          <label class="field-label" for="rt-role" style="margin-top: 12px">讨论指令 / 角色（可选，对所有参与者生效）</label>
+          <input id="rt-role" class="input-box" placeholder="比如：你们是一个务实的技术评审会，敢于反驳、看重依据" />
+
+          <div class="geo-sub-head">
+            <span>参与模型（按接力顺序，可拖拽排序）</span>
+            <button id="rt-add" class="mini">＋ 加一位</button>
+          </div>
+          <div id="rt-participants"></div>
+
+          <div class="geo-row" style="margin-top: 14px">
+            <div class="col">
+              <label class="field-label">轮数：<span id="rt-rounds-val">2</span> 轮（每轮所有人各改进一次）</label>
+              <input id="rt-rounds" type="range" min="1" max="4" step="1" value="2" />
+            </div>
+            <div class="col">
+              <label class="field-label">主持人（最后综述用）</label>
+              <select id="rt-moderator"></select>
+            </div>
+          </div>
+          <div class="ref-hint">
+            接力改进：第 1 位起草，后面每位在上一位的答案上改进；跑完所有轮后，主持人综述「共识 / 分歧 / 最终建议」。右侧每张结果都能直接改。
+          </div>
+        </section>
+
+        <section id="code-editor" class="editor hidden">
+          <label class="field-label" for="code-dir">项目文件夹（Agent 会在这里真改文件）</label>
+          <div class="step-row">
+            <input id="code-dir" class="input-box col" placeholder="点右边选择 / 新建，或手动填绝对路径" />
+            <button id="code-pick">选择文件夹</button>
+            <button id="code-new">新建文件夹</button>
+          </div>
+          <span id="code-dir-status" class="test-status"></span>
+
+          <label class="field-label" for="code-task" style="margin-top: 12px">任务 / 需求</label>
+          <textarea id="code-task" class="input-box" rows="4" placeholder="想让它们一起做的事，比如：给这个项目加一个登录页，含表单校验和单元测试"></textarea>
+
+          <label class="field-label" for="code-role" style="margin-top: 12px">协作约定（可选，对所有 Agent 生效）</label>
+          <input id="code-role" class="input-box" placeholder="比如：改动尽量小、保持代码风格一致、不新增依赖" />
+
+          <div class="geo-sub-head">
+            <span>参与 Agent（仅本地 CLI，按接力顺序，可拖拽）</span>
+            <button id="code-add" class="mini">＋ 加一位</button>
+          </div>
+          <div id="code-agents"></div>
+
+          <label class="code-auto-row" style="margin-top: 12px">
+            <input type="checkbox" id="code-auto" />
+            <span>自动批准（无人值守，免确认）</span>
+          </label>
+
+          <div class="ref-hint" style="margin-top: 10px">
+            点「运行」→ 切到终端，每个 Agent 各开一个<strong>实时交互终端</strong>、并排在同一文件夹里干活（你能实时看、随时打字让它改）。
+            队友通过项目根的 <code>TEAM_NOTES.md</code> 互通反馈。勾了「自动批准」就无人值守
+            （Claude <code>--dangerously-skip-permissions</code>、Codex <code>--dangerously-bypass-approvals-and-sandbox</code>、Gemini <code>--yolo</code>、Grok <code>--always-approve</code>、Cursor <code>--force</code>）——
+            ⚠️ 它会不经询问改文件 / 跑命令，<strong>务必先用 git 管好该项目</strong>以便回滚。
+          </div>
+        </section>
+
+        <section id="term-panel" class="term-panel hidden">
+          <div id="panes" class="panes"></div>
+        </section>
+
+        <div id="col-splitter" class="splitter" title="拖动调整左右宽度"></div>
+
         <section class="results">
           <div id="results-list"></div>
         </section>
@@ -173,6 +247,18 @@
       </div>
     </div>
 
+    <div id="term-skill-modal" class="modal hidden">
+      <div class="modal-box">
+        <div class="modal-title">发送技能到终端</div>
+        <p class="modal-note">点一个技能，把它的正文作为一条消息发给当前终端里运行的 CLI（对话中随时可发）。</p>
+        <input id="term-skill-search" class="input-box" placeholder="筛选 name / 描述…" />
+        <div id="term-skill-list" class="tsk-list"></div>
+        <div class="modal-btns">
+          <button id="term-skill-close" class="primary">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div id="skill-modal" class="modal hidden">
       <div class="modal-box">
         <div class="modal-title" id="skill-modal-title">新建技能</div>
@@ -181,6 +267,9 @@
           <input id="skill-name" placeholder="copy-polish" />
           <label>描述（一句话）</label>
           <input id="skill-desc" placeholder="把文案改得更有网感" />
+          <label>分类（可选，自由填，如 写作 / 编程 / 设计；用于技能库归类）</label>
+          <input id="skill-category" placeholder="选已有或直接输新分类（如 写作）" list="skill-cat-list" />
+          <datalist id="skill-cat-list"></datalist>
           <label>正文（指令本体，会作为系统提示）</label>
           <textarea id="skill-body" rows="10" placeholder="你是资深广告文案……"></textarea>
         </div>
@@ -222,6 +311,41 @@
         <pre id="sync-output" class="sync-output"></pre>
         <div class="modal-btns">
           <button id="sync-close" class="primary">关闭</button>
+        </div>
+      </div>
+    </div>
+    <div id="skills-modal" class="modal hidden">
+      <div class="modal-box wide resizable">
+        <div class="modal-title">技能库</div>
+        <div class="skl-bar">
+          <input id="skl-search" placeholder="搜索技能名 / 描述…" />
+          <span class="grow"></span>
+          <button id="skl-new" class="primary">＋ 新建技能</button>
+          <button id="skl-sync">⇄ 仓库</button>
+        </div>
+        <div class="skl-wrap">
+          <div id="skl-cats" class="skl-cats"></div>
+          <div id="skl-grid" class="skl-grid"></div>
+        </div>
+        <div class="modal-btns">
+          <button id="skills-close" class="primary">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="history-modal" class="modal hidden">
+      <div class="modal-box wide">
+        <div class="modal-title">运行历史</div>
+        <p class="modal-note">每次运行完自动存一条（最近 50 条，存在本机 localStorage）。点左侧条目查看，可复制 / 删除。</p>
+        <div class="history-wrap">
+          <div id="history-list" class="history-list"></div>
+          <pre id="history-view" class="history-view"></pre>
+        </div>
+        <div class="modal-btns">
+          <button id="history-clear" class="danger">清空历史</button>
+          <span class="grow"></span>
+          <button id="history-copy">复制本条</button>
+          <button id="history-close" class="primary">关闭</button>
         </div>
       </div>
     </div>

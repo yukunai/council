@@ -23,6 +23,8 @@ futures-util = "0.3"
 # Self-built runtime for the video poll loop (sleep + async HTTP), independent of
 # whatever features tauri's own runtime enables.
 tokio = { version = "1", features = ["rt", "time", "net", "io-util"] }
+# Embedded terminals (协作 / 终端面板): pseudo-terminal to run an interactive shell.
+portable-pty = "0.8"
 
 [profile.release]
 opt-level = 3
