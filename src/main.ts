@@ -3081,7 +3081,8 @@ async function runCoding() {
   const task = code.task.trim();
   const conv = code.role.trim() ? `团队约定：${code.role.trim()}\n` : "";
   const notes =
-    "队友之间通过项目根目录的 TEAM_NOTES.md 互通：发现问题/给出反馈就追加写进 TEAM_NOTES.md（注明针对哪个文件、什么问题）；动手前先看一眼 TEAM_NOTES.md 有没有给你的反馈。";
+    "队友之间通过项目根目录的 TEAM_NOTES.md 互通：发现问题/给出反馈就追加写进 TEAM_NOTES.md（注明针对哪个文件、什么问题）；动手前先看一眼 TEAM_NOTES.md 有没有给你的反馈。" +
+    "如果对某个改动或反馈有不同意见、出现争议，不要盲目地直接改、也不要和队友来回互相覆盖：先在 TEAM_NOTES.md 里写清你的理由和你建议的方案，和相关队友协商，把讨论和最终结论都记在 TEAM_NOTES.md 里；达成共识、选出大家最认同的最优方案后，再按这个方案动手。";
 
   // Move into the terminal panes and give each agent its own live terminal.
   mode = "term";
