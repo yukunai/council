@@ -2677,12 +2677,46 @@ function renderHistory() {
   const listEl = $<HTMLDivElement>("#history-list");
   const viewEl = $<HTMLPreElement>("#history-view");
   listEl.innerHTML = "";
-  if (!history.length) {
+  // 协作编程 task snapshots live at the top — clicking one fills the 协作编程 form and jumps there
+  // (they have no markdown result, so they don't use the right-hand viewer).
+  for (const t of codeHist) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    const d = new Date(t.at);
+    const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const title = document.createElement("span");
+    title.className = "h-title";
+    title.textContent = t.title;
+    const meta = document.createElement("span");
+    meta.className = "h-meta";
+    meta.textContent = `协作编程 · ${when}`;
+    const del = document.createElement("button");
+    del.className = "danger mini h-del";
+    del.textContent = "✕";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      codeHist = codeHist.filter((x) => x.id !== t.id);
+      saveCodeHist();
+      renderHistory();
+    });
+    item.append(title, meta, del);
+    item.addEventListener("click", () => {
+      loadCodeTask(t);
+      historyModal.classList.add("hidden");
+    });
+    listEl.appendChild(item);
+  }
+  if (!history.length && !codeHist.length) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
     empty.textContent = "还没有历史。跑一次任何模式就会自动存。";
     listEl.appendChild(empty);
     viewEl.textContent = "";
+    historyViewId = null;
+    return;
+  }
+  if (!history.length) {
+    viewEl.textContent = "← 点左边的协作编程任务即可填回表单继续。";
     historyViewId = null;
     return;
   }
@@ -4027,6 +4061,25 @@ $("#history-copy").addEventListener("click", async () => {
 
 // ---- 协作编程·历史任务 modal: click a snapshot to reload it into the form ----
 const codeHistModal = $<HTMLDivElement>("#code-hist-modal");
+// Reload a saved task config into the 协作编程 form (deep-copy agents so edits don't mutate
+// history) and jump to 协作编程 mode — used by both the 📋 modal and the top 历史 list.
+function loadCodeTask(t: CodeTask) {
+  code = {
+    dir: t.dir,
+    task: t.task,
+    role: t.role,
+    agents: JSON.parse(JSON.stringify(t.agents)),
+    auto: t.auto,
+    loop: t.loop,
+    loopMins: t.loopMins ?? 2.5,
+  };
+  saveCode();
+  mode = "code";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+  renderCode();
+  toast("已填回：" + t.title, "info");
+}
 function renderCodeHist() {
   const listEl = $<HTMLDivElement>("#code-hist-list");
   listEl.innerHTML = "";
@@ -4063,20 +4116,8 @@ function renderCodeHist() {
     });
     item.append(main, del);
     item.addEventListener("click", () => {
-      // Reload this snapshot into the form (deep-copy agents so edits don't mutate history).
-      code = {
-        dir: t.dir,
-        task: t.task,
-        role: t.role,
-        agents: JSON.parse(JSON.stringify(t.agents)),
-        auto: t.auto,
-        loop: t.loop,
-        loopMins: t.loopMins ?? 2.5,
-      };
-      saveCode();
-      renderCode();
+      loadCodeTask(t);
       codeHistModal.classList.add("hidden");
-      toast("已填回：" + t.title, "info");
     });
     listEl.appendChild(item);
   }
