@@ -412,6 +412,7 @@ interface CodeAgent {
   worker: string; // CLI worker value ("cli::<name>")
   duty: string; // this agent's responsibility (实现 / 审查 / 测试 …)
   skills: string[]; // attached skills (their bodies join this agent's system prompt)
+  loopMins?: number; // 持续协作: this agent's own 巡检 interval (min); undefined = use global default.
 }
 interface CodingState {
   dir: string; // absolute project folder; agents run with this as cwd
@@ -423,7 +424,7 @@ interface CodingState {
   loopMins: number; // 持续协作 interval in minutes (user-configurable)
 }
 const LS_CODE = "council.code";
-const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true, loop: false, loopMins: 2.5 };
+const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true, loop: true, loopMins: 2.5 };
 // Active 持续协作 re-scan timers (cleared on re-run / leaving the run).
 let codeLoopTimers: number[] = [];
 function clearCodeLoop() {
@@ -2915,7 +2916,45 @@ function renderCodeAgents() {
       skillRow.appendChild(chip);
     }
 
-    cardEl.append(head, duty, skillRow);
+    // Per-agent 巡检 interval (持续协作). The implementer continues on its own as soon as it goes
+    // idle, so it shows a static label; reviewers/testers each set their own minutes, so a
+    // downstream agent can scan *after* the upstream one has had time to make changes (not at the
+    // same instant, which would make it see "no change" and waste the cycle).
+    const isImplRow = i === 0 || a.duty.includes("实现");
+    const loopRow = document.createElement("div");
+    loopRow.className = "code-agent-loop";
+    const llab = document.createElement("span");
+    llab.className = "wfbar-label";
+    if (isImplRow) {
+      llab.textContent = "巡检";
+      const hint = document.createElement("span");
+      hint.className = "chips-empty";
+      hint.textContent = "实现位 · 空闲即续，不按间隔";
+      loopRow.append(llab, hint);
+    } else {
+      llab.textContent = "巡检每";
+      const mins = document.createElement("input");
+      mins.type = "number";
+      mins.min = "0.5";
+      mins.max = "60";
+      mins.step = "0.5";
+      mins.className = "code-loop-mins";
+      mins.value = a.loopMins != null ? String(a.loopMins) : "";
+      mins.placeholder = String(code.loopMins || 2.5);
+      mins.title = "留空则用下方全局间隔";
+      mins.addEventListener("change", () => {
+        const v = parseFloat(mins.value);
+        a.loopMins = mins.value.trim() === "" || isNaN(v) ? undefined : Math.min(60, Math.max(0.5, v));
+        mins.value = a.loopMins != null ? String(a.loopMins) : "";
+        saveCode();
+      });
+      const unit = document.createElement("span");
+      unit.className = "wfbar-label";
+      unit.textContent = "分钟（留空=全局）";
+      loopRow.append(llab, mins, unit);
+    }
+
+    cardEl.append(head, duty, skillRow, loopRow);
     wrap.appendChild(cardEl);
   });
 }
@@ -3034,8 +3073,11 @@ async function runCoding() {
         ? `先看 TEAM_NOTES.md 有没有新反馈：有就按反馈改，没有就直接做任务的下一步——不要停下来问我、也不要等我确认。整个任务都做完了再回"全部完成"。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
       // Implementer continues promptly once it goes idle (it shouldn't wait minutes between
-      // steps); reviewers/testers re-scan on the slower user-set cadence.
-      const minGapMs = isImpl ? 15000 : Math.max(0.5, code.loopMins || 2.5) * 60000 + i * 5000;
+      // steps); reviewers/testers each use their OWN interval (a.loopMins) falling back to the
+      // global default — so a downstream agent can be set to scan *after* the upstream one has
+      // made its changes, instead of firing at the same instant and seeing "no change".
+      const ownMins = a.loopMins ?? code.loopMins ?? 2.5;
+      const minGapMs = isImpl ? 15000 : Math.max(0.5, ownMins) * 60000 + i * 5000;
       const QUIET = 8000; // ms of no output ⇒ agent finished its turn (TUIs animate while busy)
       const USER_QUIET = 12000; // don't butt in if you typed recently
       let lastFire = Date.now(); // first launch already gave it the task — wait a full interval
@@ -3755,6 +3797,13 @@ $<HTMLInputElement>("#code-loop-mins").addEventListener("change", (e) => {
   const v = parseFloat((e.target as HTMLInputElement).value);
   code.loopMins = isNaN(v) ? 2.5 : Math.min(60, Math.max(0.5, v));
   (e.target as HTMLInputElement).value = String(code.loopMins);
+  // Setting an interval means you want it scanning — flip the master switch on so the number
+  // isn't silently inert (the #1 footgun: interval set but 持续协作 left unchecked).
+  if (!code.loop) {
+    code.loop = true;
+    $<HTMLInputElement>("#code-loop").checked = true;
+    toast("已自动开启「持续协作」", "info");
+  }
   saveCode();
 });
 $("#code-add").addEventListener("click", () => {

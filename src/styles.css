@@ -583,6 +583,20 @@ select:focus {
 .code-auto-row span {
   vertical-align: middle;
 }
+.code-agent-loop {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.code-agent-loop .wfbar-label {
+  flex: none;
+}
+.code-agent-loop .code-loop-mins {
+  margin: 0;
+}
 /* 协作编程 Agent 的技能：可多选的标签 */
 .skill-chips {
   display: flex;
