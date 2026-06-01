@@ -108,3 +108,6 @@
 ### 其它
 - 启动即终端（默认 mode = term）。
 - 打包：`npm run tauri build` → `cp -R council.app /Applications/`（覆盖前先 pkill）。
+
+### 协作编程：单 AI 停止/开启做明显（放到 ⚡技能 旁的空地）
+- 之前单独停/开只有标签上挤着的小 ■/▶，用户没注意到。现在每个分屏 ⚡技能 右边加一个明显的「■ 停止此 AI / ▶ 开启此 AI」按钮（红=运行中可停，绿=已停可开），控制该 pane 的 active AI；切标签时 renderTabs 重渲染跟随。小 ■/▶ 保留做精确/多标签控制。

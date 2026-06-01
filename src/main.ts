@@ -3500,6 +3500,20 @@ class Pane {
       openTermSkillPicker(this.active);
     });
     this.tabsEl.appendChild(sk);
+    // Prominent 停止/开启 for THIS pane's active AI, in the open space next to ⚡技能.
+    const act = this.active;
+    if (act && act.loopParams && act.sessionId) {
+      const looping = termHasLoop(act);
+      const ctl = document.createElement("button");
+      ctl.className = "tab-agent-ctl" + (looping ? " on" : "");
+      ctl.textContent = looping ? "■ 停止此 AI" : "▶ 开启此 AI";
+      ctl.title = looping ? "停止这个 AI（停循环 + 中断它当前的动作）" : "开启这个 AI（恢复持续协作）";
+      ctl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        looping ? stopAgentWork(act) : startAgentLoop(act);
+      });
+      this.tabsEl.appendChild(ctl);
+    }
   }
 
   refit() {
