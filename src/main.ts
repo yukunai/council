@@ -3072,14 +3072,14 @@ async function runCoding() {
       const nudge = isImpl
         ? `先看 TEAM_NOTES.md 有没有新反馈：有就按反馈改，没有就直接做任务的下一步——不要停下来问我、也不要等我确认。整个任务都做完了再回"全部完成"。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
-      // Implementer continues promptly once it goes idle (it shouldn't wait minutes between
-      // steps); reviewers/testers each use their OWN interval (a.loopMins) falling back to the
-      // global default — so a downstream agent can be set to scan *after* the upstream one has
-      // made its changes, instead of firing at the same instant and seeing "no change".
+      // 主写(实现位)：写完一步后先休息 2 分钟等用户发新指令；这 2 分钟里没人工干预（没新输出、
+      // 也没敲键盘）才提示它继续下一步。给人一个介入的窗口，而不是它一空闲就抢着往下冲。
+      // 审查/测试：按各自间隔(a.loopMins，留空用全局)巡检，可把下游设得比上游晚以错开时序。
       const ownMins = a.loopMins ?? code.loopMins ?? 2.5;
-      const minGapMs = isImpl ? 15000 : Math.max(0.5, ownMins) * 60000 + i * 5000;
-      const QUIET = 8000; // ms of no output ⇒ agent finished its turn (TUIs animate while busy)
-      const USER_QUIET = 12000; // don't butt in if you typed recently
+      const REST_IMPL = 120000; // 主写写完一步后的休息/等人工窗口：2 分钟
+      const minGapMs = isImpl ? REST_IMPL : Math.max(0.5, ownMins) * 60000 + i * 5000;
+      const QUIET = isImpl ? REST_IMPL : 8000; // 主写要静默满 2 分钟(这步真做完、没人接手)才续
+      const USER_QUIET = isImpl ? REST_IMPL : 12000; // 主写：2 分钟内有人工干预就不自动催，让你来
       let lastFire = Date.now(); // first launch already gave it the task — wait a full interval
       // Poll often, but only actually nudge when the agent is idle AND the interval has elapsed,
       // so the prompt never lands mid-task or while you're typing.
