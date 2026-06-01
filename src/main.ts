@@ -425,11 +425,80 @@ interface CodingState {
 }
 const LS_CODE = "council.code";
 const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true, loop: true, loopMins: 2.5 };
-// Active 持续协作 re-scan timers (cleared on re-run / leaving the run).
-let codeLoopTimers: number[] = [];
+// 持续协作 loop config kept on each agent's Term, so a stopped agent can be re-started later.
+interface LoopParams {
+  nudge: string;
+  minGapMs: number;
+  quiet: number;
+  userQuiet: number;
+}
+// Active 持续协作 re-scan timers, each tied to its agent's terminal so we can stop/start one or all.
+interface CodeLoop {
+  timer: number;
+  term: Term;
+}
+let codeLoops: CodeLoop[] = [];
+function termHasLoop(term: Term) {
+  return codeLoops.some((l) => l.term === term);
+}
+// Every agent terminal that was launched with a 持续协作 config this run (running or paused).
+function agentTerms(): Term[] {
+  const out: Term[] = [];
+  for (const p of panes) for (const t of p.tabs) if (t.loopParams && t.sessionId) out.push(t);
+  return out;
+}
+// (Re)start an agent's loop from its stored config. No-op if already looping or no config.
+function startAgentLoop(term: Term) {
+  const p = term.loopParams;
+  if (!p || !term.sessionId || termHasLoop(term)) return;
+  let lastFire = Date.now() - p.minGapMs; // "due" right away → fires at the next idle window
+  const timer = window.setInterval(() => {
+    if (!term.sessionId) {
+      clearInterval(timer);
+      codeLoops = codeLoops.filter((l) => l.timer !== timer);
+      term.pane.renderTabs();
+      refreshTermToolbar();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastFire < p.minGapMs) return; // respect the chosen interval
+    if (now - term.lastOutputAt < p.quiet) return; // still working — wait for it to go quiet
+    if (now - term.lastInputAt < p.userQuiet) return; // you're typing — don't interrupt
+    lastFire = now;
+    const sid = term.sessionId;
+    // Type the text, then send Enter as a SEPARATE write — a trailing \r in the same chunk gets
+    // absorbed by the TUI's paste handling and the line just sits there unsent.
+    invoke("write_pty", { id: sid, data: p.nudge }).catch(() => {});
+    setTimeout(() => term.sessionId === sid && invoke("write_pty", { id: sid, data: "\r" }).catch(() => {}), 350);
+  }, 10000);
+  codeLoops.push({ timer, term });
+  term.pane.renderTabs();
+  refreshTermToolbar();
+}
+// 停止某个 AI：清掉它的持续协作循环（不再自动催）+ 发 Esc 中断当前正在做的这一轮（config 留着可再开启）。
+function stopAgentWork(term: Term) {
+  codeLoops.filter((l) => l.term === term).forEach((l) => clearInterval(l.timer));
+  codeLoops = codeLoops.filter((l) => l.term !== term);
+  if (term.sessionId) invoke("write_pty", { id: term.sessionId, data: "\x1b" }).catch(() => {});
+  term.pane.renderTabs();
+  refreshTermToolbar();
+}
 function clearCodeLoop() {
-  codeLoopTimers.forEach((t) => clearInterval(t));
-  codeLoopTimers = [];
+  codeLoops.forEach((l) => clearInterval(l.timer));
+  codeLoops = [];
+  refreshTermToolbar();
+}
+// 一键全部停止 / 全部开启。
+function stopAllAgentsWork() {
+  agentTerms().forEach((t) => stopAgentWork(t));
+}
+function startAllAgentsWork() {
+  agentTerms().forEach((t) => startAgentLoop(t));
+}
+// Show the 终端 toolbar (全部停止/开启) only when there are 协作编程 agents around.
+function refreshTermToolbar() {
+  const bar = document.getElementById("term-toolbar");
+  if (bar) bar.classList.toggle("hidden", agentTerms().length === 0);
 }
 let code: CodingState = { ...DEFAULT_CODE, ...load(LS_CODE, {}) };
 // How to launch each CLI interactively, seeded with a task prompt, optionally unattended.
@@ -3056,49 +3125,33 @@ async function runCoding() {
       pane.active!.launch(program, [...auto, prompt], dir, undefined, accept);
     }
 
-    // 持续协作: periodically re-prompt this agent to re-scan the project + TEAM_NOTES.md,
-    // so the team keeps reacting to each other's changes instead of stopping after one pass.
+    // 持续协作: re-prompt this agent to re-scan the project + TEAM_NOTES.md, so the team keeps
+    // reacting to each other's changes. The config is stored on the Term and the loop started via
+    // startAgentLoop, so it can be stopped & re-started (per-agent or 全部) from the toolbar/tabs.
     if (code.loop) {
       const term = pane.active!;
-      // Short nudge — the agent already knows its role/the TEAM_NOTES.md convention from launch,
-      // so we don't re-type a long paragraph (that also got stuck in the TUI input box). The
-      // implementer keeps moving to the next step instead of waiting; reviewers re-scan.
+      // Short nudge — the agent already knows its role/the TEAM_NOTES.md convention from launch.
       const nudge = isImpl
         ? `先看 TEAM_NOTES.md 有没有新反馈：有就按反馈改，没有就直接做任务的下一步——不要停下来问我、也不要等我确认。整个任务都做完了再回"全部完成"。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
-      // 主写(实现位)：写完一步后先休息 2 分钟等用户发新指令；这 2 分钟里没人工干预（没新输出、
-      // 也没敲键盘）才提示它继续下一步。给人一个介入的窗口，而不是它一空闲就抢着往下冲。
-      // 审查/测试：按各自间隔(a.loopMins，留空用全局)巡检，可把下游设得比上游晚以错开时序。
+      // 主写(实现位)：写完一步后先休息可自定义的几分钟(默认 2)等用户介入；这段时间没人工干预(没新
+      // 输出、没敲键盘)才提示它继续。审查/测试：按各自间隔(a.loopMins，留空用全局)巡检，可错开时序。
       const ownMins = a.loopMins ?? code.loopMins ?? 2.5;
-      const REST_IMPL = Math.max(0.5, a.loopMins ?? 2) * 60000; // 主写写完一步后的等人工窗口，可自由填，默认 2 分钟
-      const minGapMs = isImpl ? REST_IMPL : Math.max(0.5, ownMins) * 60000 + i * 5000;
-      const QUIET = isImpl ? REST_IMPL : 8000; // 主写要静默满 2 分钟(这步真做完、没人接手)才续
-      const USER_QUIET = isImpl ? REST_IMPL : 12000; // 主写：2 分钟内有人工干预就不自动催，让你来
-      let lastFire = Date.now(); // first launch already gave it the task — wait a full interval
-      // Poll often, but only actually nudge when the agent is idle AND the interval has elapsed,
-      // so the prompt never lands mid-task or while you're typing.
-      const timer = window.setInterval(() => {
-        if (!term.sessionId) {
-          clearInterval(timer);
-          return;
-        }
-        const now = Date.now();
-        if (now - lastFire < minGapMs) return; // respect the chosen interval
-        if (now - term.lastOutputAt < QUIET) return; // still working — wait for it to go quiet
-        if (now - term.lastInputAt < USER_QUIET) return; // you're typing — don't interrupt
-        lastFire = now;
-        const sid = term.sessionId;
-        // Type the text, then send Enter as a SEPARATE write — a trailing \r in the same
-        // chunk gets absorbed by the TUI's paste handling and the line just sits there unsent.
-        invoke("write_pty", { id: sid, data: nudge }).catch(() => {});
-        setTimeout(() => term.sessionId === sid && invoke("write_pty", { id: sid, data: "\r" }).catch(() => {}), 350);
-      }, 10000);
-      codeLoopTimers.push(timer);
+      const REST_IMPL = Math.max(0.5, a.loopMins ?? 2) * 60000;
+      term.loopParams = {
+        nudge,
+        minGapMs: isImpl ? REST_IMPL : Math.max(0.5, ownMins) * 60000 + i * 5000,
+        quiet: isImpl ? REST_IMPL : 8000,
+        userQuiet: isImpl ? REST_IMPL : 12000,
+      };
+      startAgentLoop(term);
     }
   });
 
-  if (code.loop)
-    toast(`已开启持续协作：各 Agent 空闲后约每 ${code.loopMins || 2.5} 分钟自动巡检/推进一次（关掉「持续协作」或关终端即停）`, "info");
+  if (code.loop) {
+    refreshTermToolbar();
+    toast(`已开启持续协作：各 Agent 空闲后约每 ${code.loopMins || 2.5} 分钟自动巡检/推进一次（顶部「■ 全部停止」或每个标签上的 ■ 可随时停）`, "info");
+  }
 }
 
 // ---- 终端 mode (embedded xterm + PTY, ported from clink: split panes + tabs + launcher) ----
@@ -3131,6 +3184,7 @@ class Term {
   sessionId: string | null = null;
   lastOutputAt = 0; // ms of last PTY output — used by 持续协作 to tell when the agent is idle
   lastInputAt = 0; // ms of last user keystroke — so auto-巡检 never interrupts your typing
+  loopParams?: LoopParams; // 持续协作 config if launched as an agent — lets it be stopped & re-started
   cwd = "~";
   program = "";
   title = "";
@@ -3384,12 +3438,30 @@ class Pane {
       const label = tm.launched ? tm.title : "新终端";
       const chip = document.createElement("div");
       chip.className = "tab" + (tm === this.active ? " active" : "");
-      chip.innerHTML = `<span class="tab-title">${escHtml(label)}</span><button class="tab-close" title="关闭">✕</button>`;
-      chip.addEventListener("click", () => this.setActiveTerm(tm));
-      chip.querySelector(".tab-close")!.addEventListener("click", (e) => {
+      chip.innerHTML = `<span class="tab-title">${escHtml(label)}</span>`;
+      // 协作编程 agent: a per-AI 停止/开启 toggle (停 = stop loop + Esc; 开 = restart loop).
+      if (tm.loopParams) {
+        const looping = termHasLoop(tm);
+        const tog = document.createElement("button");
+        tog.className = "tab-stop" + (looping ? " on" : "");
+        tog.textContent = looping ? "■" : "▶";
+        tog.title = looping ? "停止这个 AI（停循环 + 中断当前动作）" : "开启这个 AI（恢复持续协作）";
+        tog.addEventListener("click", (e) => {
+          e.stopPropagation();
+          looping ? stopAgentWork(tm) : startAgentLoop(tm);
+        });
+        chip.appendChild(tog);
+      }
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.title = "关闭";
+      close.textContent = "✕";
+      close.addEventListener("click", (e) => {
         e.stopPropagation();
         this.closeTab(tm);
       });
+      chip.appendChild(close);
+      chip.addEventListener("click", () => this.setActiveTerm(tm));
       this.tabsEl.appendChild(chip);
     }
     const add = document.createElement("button");
@@ -3756,6 +3828,14 @@ $("#mode-term").addEventListener("click", () => {
   applyMode();
 });
 $("#term-skill-close").addEventListener("click", () => termSkillModal.classList.add("hidden"));
+$("#stop-all-agents").addEventListener("click", () => {
+  stopAllAgentsWork();
+  toast("已停止全部 AI 的持续协作", "info");
+});
+$("#start-all-agents").addEventListener("click", () => {
+  startAllAgentsWork();
+  toast("已开启全部 AI 的持续协作", "info");
+});
 $<HTMLInputElement>("#term-skill-search").addEventListener("input", (e) => {
   termSkillSearch = (e.target as HTMLInputElement).value;
   renderTermSkillList();
