@@ -2987,7 +2987,7 @@ async function runCoding() {
       // so we don't re-type a long paragraph (that also got stuck in the TUI input box). The
       // implementer keeps moving to the next step instead of waiting; reviewers re-scan.
       const nudge = isImpl
-        ? `继续推进下一步（先看 TEAM_NOTES.md 有没有给你的新反馈，有就先处理）。`
+        ? `先看 TEAM_NOTES.md：有给你的新反馈就先改；如果审查/测试没提修改意见，就直接继续做任务的下一步，别等。整个任务都做完了再回"全部完成"。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
       const minGapMs = Math.max(0.5, code.loopMins || 2.5) * 60000 + i * 5000; // stagger a touch
       const QUIET = 8000; // ms of no output ⇒ agent finished its turn (TUIs animate while busy)
