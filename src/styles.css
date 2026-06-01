@@ -865,6 +865,49 @@ select:focus {
   line-height: 1.5;
 }
 
+/* 协作编程·历史任务 list */
+.codehist-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.codehist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.codehist-item:last-child {
+  border-bottom: none;
+}
+.codehist-item:hover {
+  background: var(--panel-2);
+}
+.codehist-item .ch-main {
+  flex: 1;
+  min-width: 0;
+}
+.codehist-item .ch-title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codehist-item .ch-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codehist-item .ch-del {
+  flex: none;
+}
+
 .result-copy {
   margin-left: auto;
 }

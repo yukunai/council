@@ -474,6 +474,48 @@ code.agents = (code.agents as unknown[]).map((a) => {
 function saveCode() {
   localStorage.setItem(LS_CODE, JSON.stringify(code));
 }
+
+// ---- 协作编程·历史任务: each run snapshots its config so older tasks aren't overwritten and
+// can be reloaded into the form (the regular 运行历史 only covers result-producing modes). ----
+interface CodeTask {
+  id: string;
+  at: number;
+  title: string;
+  dir: string;
+  task: string;
+  role: string;
+  agents: CodeAgent[];
+  auto: boolean;
+  loop: boolean;
+  loopMins: number;
+}
+const LS_CODE_HIST = "council.codehist";
+let codeHist: CodeTask[] = load(LS_CODE_HIST, []);
+function saveCodeHist() {
+  localStorage.setItem(LS_CODE_HIST, JSON.stringify(codeHist));
+}
+function pushCodeTask() {
+  if (!code.task.trim() && !code.dir.trim()) return;
+  const title = (code.task.trim().split("\n").find((l) => l.trim()) || code.dir.trim() || "未命名任务").slice(0, 50);
+  const snap: CodeTask = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    at: Date.now(),
+    title,
+    dir: code.dir,
+    task: code.task,
+    role: code.role,
+    agents: JSON.parse(JSON.stringify(code.agents)),
+    auto: code.auto,
+    loop: code.loop,
+    loopMins: code.loopMins,
+  };
+  // De-dupe: same dir + task replaces the old entry (and floats to the top).
+  codeHist = codeHist.filter((t) => !(t.dir === snap.dir && t.task === snap.task));
+  codeHist.unshift(snap);
+  if (codeHist.length > 30) codeHist.length = 30;
+  saveCodeHist();
+}
+
 // Suggested duties pre-filled as agents are added, so the division of labor is clear.
 const DUTY_SUGGEST = ["实现功能", "审查 + 修 bug", "补测试", "重构 / 优化"];
 
@@ -2916,6 +2958,8 @@ async function runCoding() {
   const dirOk = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
   if (!dirOk) return toast("项目文件夹不存在：" + dir);
 
+  pushCodeTask(); // snapshot this run's config into 历史任务 before we launch
+
   // Effective skills per agent = its own + the default (left-library checked) skills.
   const agentSkills = (a: CodeAgent) => [...new Set([...defaultSkills, ...a.skills])];
   // Preload every needed skill's body once.
@@ -3823,6 +3867,76 @@ $("#history-copy").addEventListener("click", async () => {
   } catch {
     /* clipboard blocked */
   }
+});
+
+// ---- 协作编程·历史任务 modal: click a snapshot to reload it into the form ----
+const codeHistModal = $<HTMLDivElement>("#code-hist-modal");
+function renderCodeHist() {
+  const listEl = $<HTMLDivElement>("#code-hist-list");
+  listEl.innerHTML = "";
+  if (!codeHist.length) {
+    const empty = document.createElement("div");
+    empty.className = "sidebar-note";
+    empty.textContent = "还没有历史任务。在协作编程里点一次「运行」就会自动存一份。";
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const t of codeHist) {
+    const item = document.createElement("div");
+    item.className = "codehist-item";
+    const d = new Date(t.at);
+    const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const main = document.createElement("div");
+    main.className = "ch-main";
+    const title = document.createElement("div");
+    title.className = "ch-title";
+    title.textContent = t.title;
+    const meta = document.createElement("div");
+    meta.className = "ch-meta";
+    const who = t.agents.map((a) => a.worker).join(" · ") || "无 Agent";
+    meta.textContent = `${when} · ${shortCwd(t.dir) || t.dir || "无目录"} · ${who}`;
+    main.append(title, meta);
+    const del = document.createElement("button");
+    del.className = "danger mini ch-del";
+    del.textContent = "✕";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      codeHist = codeHist.filter((x) => x.id !== t.id);
+      saveCodeHist();
+      renderCodeHist();
+    });
+    item.append(main, del);
+    item.addEventListener("click", () => {
+      // Reload this snapshot into the form (deep-copy agents so edits don't mutate history).
+      code = {
+        dir: t.dir,
+        task: t.task,
+        role: t.role,
+        agents: JSON.parse(JSON.stringify(t.agents)),
+        auto: t.auto,
+        loop: t.loop,
+        loopMins: t.loopMins ?? 2.5,
+      };
+      saveCode();
+      renderCode();
+      codeHistModal.classList.add("hidden");
+      toast("已填回：" + t.title, "info");
+    });
+    listEl.appendChild(item);
+  }
+}
+$("#code-hist-open").addEventListener("click", () => {
+  renderCodeHist();
+  codeHistModal.classList.remove("hidden");
+});
+$("#code-hist-close").addEventListener("click", () => codeHistModal.classList.add("hidden"));
+$("#code-hist-clear").addEventListener("click", () => {
+  codeHist = [];
+  saveCodeHist();
+  renderCodeHist();
+});
+codeHistModal.addEventListener("click", (e) => {
+  if (e.target === codeHistModal) codeHistModal.classList.add("hidden");
 });
 
 $("#wf-save").addEventListener("click", saveWorkflow);
