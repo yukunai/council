@@ -3002,7 +3002,7 @@ async function runCoding() {
       (skillText ? `${skillText}\n\n` : "") +
       `${notes}\n\n` +
       (isImpl
-        ? "现在请先把基础实现做出来，直接改文件；做完简述你改了什么。"
+        ? "现在开始动手，直接改文件，一步步把整个任务做完——不要只做个基础雏形就停，做完一步就紧接着做下一步，直到整个任务真正完成；每步简述你改了什么再继续。"
         : "现在请查看当前代码和 TEAM_NOTES.md，围绕你的职责动手（审查/修 bug/补测试/重构）；把要给别人的反馈写进 TEAM_NOTES.md，并简述你改了什么。");
     // One pane per agent (side by side) up to MAX_PANES; extra agents become tabs in the
     // last pane. Each launches the CLI interactively (no -p) seeded with the prompt.
@@ -3033,7 +3033,9 @@ async function runCoding() {
       const nudge = isImpl
         ? `先看 TEAM_NOTES.md：有给你的新反馈就先改；如果审查/测试没提修改意见，就直接继续做任务的下一步，别等。整个任务都做完了再回"全部完成"。`
         : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
-      const minGapMs = Math.max(0.5, code.loopMins || 2.5) * 60000 + i * 5000; // stagger a touch
+      // Implementer continues promptly once it goes idle (it shouldn't wait minutes between
+      // steps); reviewers/testers re-scan on the slower user-set cadence.
+      const minGapMs = isImpl ? 15000 : Math.max(0.5, code.loopMins || 2.5) * 60000 + i * 5000;
       const QUIET = 8000; // ms of no output ⇒ agent finished its turn (TUIs animate while busy)
       const USER_QUIET = 12000; // don't butt in if you typed recently
       let lastFire = Date.now(); // first launch already gave it the task — wait a full interval
