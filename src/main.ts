@@ -2925,34 +2925,28 @@ function renderCodeAgents() {
     loopRow.className = "code-agent-loop";
     const llab = document.createElement("span");
     llab.className = "wfbar-label";
-    if (isImplRow) {
-      llab.textContent = "巡检";
-      const hint = document.createElement("span");
-      hint.className = "chips-empty";
-      hint.textContent = "实现位 · 空闲即续，不按间隔";
-      loopRow.append(llab, hint);
-    } else {
-      llab.textContent = "巡检每";
-      const mins = document.createElement("input");
-      mins.type = "number";
-      mins.min = "0.5";
-      mins.max = "60";
-      mins.step = "0.5";
-      mins.className = "code-loop-mins";
+    // 实现位：a.loopMins = 写完一步后等多少分钟没人介入再继续（默认 2）。
+    // 审查/测试：a.loopMins = 巡检间隔（留空=用下方全局间隔）。
+    llab.textContent = isImplRow ? "写完一步等" : "巡检每";
+    const mins = document.createElement("input");
+    mins.type = "number";
+    mins.min = "0.5";
+    mins.max = "60";
+    mins.step = "0.5";
+    mins.className = "code-loop-mins";
+    mins.value = a.loopMins != null ? String(a.loopMins) : "";
+    mins.placeholder = isImplRow ? "2" : String(code.loopMins || 2.5);
+    mins.title = isImplRow ? "写完一步后，这么久没人插手就自动继续下一步" : "留空则用下方全局间隔";
+    mins.addEventListener("change", () => {
+      const v = parseFloat(mins.value);
+      a.loopMins = mins.value.trim() === "" || isNaN(v) ? undefined : Math.min(60, Math.max(0.5, v));
       mins.value = a.loopMins != null ? String(a.loopMins) : "";
-      mins.placeholder = String(code.loopMins || 2.5);
-      mins.title = "留空则用下方全局间隔";
-      mins.addEventListener("change", () => {
-        const v = parseFloat(mins.value);
-        a.loopMins = mins.value.trim() === "" || isNaN(v) ? undefined : Math.min(60, Math.max(0.5, v));
-        mins.value = a.loopMins != null ? String(a.loopMins) : "";
-        saveCode();
-      });
-      const unit = document.createElement("span");
-      unit.className = "wfbar-label";
-      unit.textContent = "分钟（留空=全局）";
-      loopRow.append(llab, mins, unit);
-    }
+      saveCode();
+    });
+    const unit = document.createElement("span");
+    unit.className = "wfbar-label";
+    unit.textContent = isImplRow ? "分钟没人介入再继续" : "分钟（留空=全局）";
+    loopRow.append(llab, mins, unit);
 
     cardEl.append(head, duty, skillRow, loopRow);
     wrap.appendChild(cardEl);
@@ -3076,7 +3070,7 @@ async function runCoding() {
       // 也没敲键盘）才提示它继续下一步。给人一个介入的窗口，而不是它一空闲就抢着往下冲。
       // 审查/测试：按各自间隔(a.loopMins，留空用全局)巡检，可把下游设得比上游晚以错开时序。
       const ownMins = a.loopMins ?? code.loopMins ?? 2.5;
-      const REST_IMPL = 120000; // 主写写完一步后的休息/等人工窗口：2 分钟
+      const REST_IMPL = Math.max(0.5, a.loopMins ?? 2) * 60000; // 主写写完一步后的等人工窗口，可自由填，默认 2 分钟
       const minGapMs = isImpl ? REST_IMPL : Math.max(0.5, ownMins) * 60000 + i * 5000;
       const QUIET = isImpl ? REST_IMPL : 8000; // 主写要静默满 2 分钟(这步真做完、没人接手)才续
       const USER_QUIET = isImpl ? REST_IMPL : 12000; // 主写：2 分钟内有人工干预就不自动催，让你来
