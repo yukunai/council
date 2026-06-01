@@ -4,6 +4,13 @@
 
 ## 2026-06-01
 
+### 协作编程「持续协作」无限循环（空闲触发 + 短指令）
+- 新增 `code.loop` 开关（表单复选框「持续协作」，默认关）+ `code.loopMins`（间隔分钟，输入框 `#code-loop-mins`，默认 2.5，0.5~60 可调）：开启后协作编程不再跑完一轮就停。
+- **只在 Agent 空闲时巡检**（之前是固定 `setInterval` 盲发，会插进 Agent 正忙/用户正打字时）：Term 上记 `lastOutputAt`（PTY 有输出就更新，TUI 忙时一直在重绘动画）和 `lastInputAt`（用户键入就更新）。计时器改成每 10s 轮询，只有「距上次巡检 ≥ loopMins」且「无输出 ≥8s（已干完这轮）」且「用户 ≥12s 没打字」三条都满足才发。
+- **短指令、不再打一大段**：Agent 启动时已知道自己的职责 + TEAM_NOTES.md 约定，巡检只发一句短的。主写（isImpl）发"继续推进下一步（先看 TEAM_NOTES.md 有无新反馈）"——**没问题就往下做、不傻等**；审查/测试发"再巡检一遍，有问题处理并写进 TEAM_NOTES.md，没有回'暂无'"。
+- **修卡住**：之前 `write_pty(text + "\r")` 一次发，TUI 的粘贴处理会把结尾 `\r` 吞掉，整行卡在输入框里不提交。改成先发文本、350ms 后**单独再发一个 `\r`**才真正回车提交。
+- 计时器存 `codeLoopTimers`；停止：取消勾选（清计时器）、关终端（term.sessionId 空时自清）、重跑（resetPanes 里 clearCodeLoop）。⚠️ = 持续耗 token。
+
 ### 发布 v0.1.0 安装包
 - 源码已 commit 并 push 到 `origin/main`（`1b910ab`）。
 - GitHub Release **v0.1.0**：挂了两个 macOS Apple Silicon (arm64) 安装包——`council_0.1.0_aarch64.dmg`（拖入应用程序）和 `council_0.1.0_macos_arm64.zip`（解压即用）。本地未签名，首次右键「打开」。

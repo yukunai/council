@@ -419,9 +419,17 @@ interface CodingState {
   role: string; // optional shared convention for all agents (style, no new deps…)
   agents: CodeAgent[]; // each gets its own live terminal, by duty
   auto: boolean; // inject each CLI's auto-approve flag so it runs unattended (no prompts)
+  loop: boolean; // 持续协作: periodically re-prompt each agent to re-scan (infinite loop)
+  loopMins: number; // 持续协作 interval in minutes (user-configurable)
 }
 const LS_CODE = "council.code";
-const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true };
+const DEFAULT_CODE: CodingState = { dir: "", task: "", role: "", agents: [], auto: true, loop: false, loopMins: 2.5 };
+// Active 持续协作 re-scan timers (cleared on re-run / leaving the run).
+let codeLoopTimers: number[] = [];
+function clearCodeLoop() {
+  codeLoopTimers.forEach((t) => clearInterval(t));
+  codeLoopTimers = [];
+}
 let code: CodingState = { ...DEFAULT_CODE, ...load(LS_CODE, {}) };
 // How to launch each CLI interactively, seeded with a task prompt, optionally unattended.
 // `auto` = the flag that disables "allow this action?" prompts. `promptArg`: true → pass
@@ -2890,6 +2898,8 @@ function renderCode() {
   $<HTMLTextAreaElement>("#code-task").value = code.task;
   $<HTMLInputElement>("#code-role").value = code.role;
   $<HTMLInputElement>("#code-auto").checked = code.auto;
+  $<HTMLInputElement>("#code-loop").checked = code.loop;
+  $<HTMLInputElement>("#code-loop-mins").value = String(code.loopMins || 2.5);
   renderCodeAgents();
   validateCodeDir();
 }
@@ -2968,7 +2978,45 @@ async function runCoding() {
     } else {
       pane.active!.launch(program, [...auto, prompt], dir, undefined, accept);
     }
+
+    // 持续协作: periodically re-prompt this agent to re-scan the project + TEAM_NOTES.md,
+    // so the team keeps reacting to each other's changes instead of stopping after one pass.
+    if (code.loop) {
+      const term = pane.active!;
+      // Short nudge — the agent already knows its role/the TEAM_NOTES.md convention from launch,
+      // so we don't re-type a long paragraph (that also got stuck in the TUI input box). The
+      // implementer keeps moving to the next step instead of waiting; reviewers re-scan.
+      const nudge = isImpl
+        ? `继续推进下一步（先看 TEAM_NOTES.md 有没有给你的新反馈，有就先处理）。`
+        : `再巡检一遍：代码和 TEAM_NOTES.md 有没有新变化，有问题就处理并写进 TEAM_NOTES.md，没有就回"暂无"。`;
+      const minGapMs = Math.max(0.5, code.loopMins || 2.5) * 60000 + i * 5000; // stagger a touch
+      const QUIET = 8000; // ms of no output ⇒ agent finished its turn (TUIs animate while busy)
+      const USER_QUIET = 12000; // don't butt in if you typed recently
+      let lastFire = Date.now(); // first launch already gave it the task — wait a full interval
+      // Poll often, but only actually nudge when the agent is idle AND the interval has elapsed,
+      // so the prompt never lands mid-task or while you're typing.
+      const timer = window.setInterval(() => {
+        if (!term.sessionId) {
+          clearInterval(timer);
+          return;
+        }
+        const now = Date.now();
+        if (now - lastFire < minGapMs) return; // respect the chosen interval
+        if (now - term.lastOutputAt < QUIET) return; // still working — wait for it to go quiet
+        if (now - term.lastInputAt < USER_QUIET) return; // you're typing — don't interrupt
+        lastFire = now;
+        const sid = term.sessionId;
+        // Type the text, then send Enter as a SEPARATE write — a trailing \r in the same
+        // chunk gets absorbed by the TUI's paste handling and the line just sits there unsent.
+        invoke("write_pty", { id: sid, data: nudge }).catch(() => {});
+        setTimeout(() => term.sessionId === sid && invoke("write_pty", { id: sid, data: "\r" }).catch(() => {}), 350);
+      }, 10000);
+      codeLoopTimers.push(timer);
+    }
   });
+
+  if (code.loop)
+    toast(`已开启持续协作：各 Agent 空闲后约每 ${code.loopMins || 2.5} 分钟自动巡检/推进一次（关掉「持续协作」或关终端即停）`, "info");
 }
 
 // ---- 终端 mode (embedded xterm + PTY, ported from clink: split panes + tabs + launcher) ----
@@ -2999,6 +3047,8 @@ class Term {
   term: Terminal | null = null;
   fit: FitAddon | null = null;
   sessionId: string | null = null;
+  lastOutputAt = 0; // ms of last PTY output — used by 持续协作 to tell when the agent is idle
+  lastInputAt = 0; // ms of last user keystroke — so auto-巡检 never interrupts your typing
   cwd = "~";
   program = "";
   title = "";
@@ -3089,6 +3139,7 @@ class Term {
     const onData = new Channel<ArrayBuffer>();
     onData.onmessage = (msg) => {
       const bytes = new Uint8Array(msg);
+      this.lastOutputAt = Date.now();
       if (this.term) this.term.write(bytes);
       if (!acceptDone) {
         acceptBuf = (acceptBuf + new TextDecoder().decode(bytes)).slice(-6000);
@@ -3112,7 +3163,10 @@ class Term {
       term.writeln(`\x1b[31m启动失败：${err instanceof Error ? err.message : String(err)}\x1b[0m`);
       return;
     }
-    term.onData((d) => invoke("write_pty", { id: sid, data: d }).catch(() => {}));
+    term.onData((d) => {
+      this.lastInputAt = Date.now();
+      invoke("write_pty", { id: sid, data: d }).catch(() => {});
+    });
 
     // Seed a prompt by typing it into the CLI's stdin (for CLIs that don't take a
     // positional prompt, e.g. grok). Collapse newlines to one line so a TUI input box
@@ -3296,6 +3350,7 @@ function addPane(): Pane {
 // Tear down every pane/terminal and clear the area (used by 协作编程 before launching
 // one fresh terminal per agent).
 function resetPanes() {
+  clearCodeLoop(); // stop any 持续协作 timers from a previous run
   panes.forEach((p) => p.tabs.forEach((t) => t.teardown()));
   panes.length = 0;
   activePane = null;
@@ -3640,6 +3695,20 @@ $<HTMLInputElement>("#code-role").addEventListener("input", (e) => {
 });
 $<HTMLInputElement>("#code-auto").addEventListener("change", (e) => {
   code.auto = (e.target as HTMLInputElement).checked;
+  saveCode();
+});
+$<HTMLInputElement>("#code-loop").addEventListener("change", (e) => {
+  code.loop = (e.target as HTMLInputElement).checked;
+  saveCode();
+  if (!code.loop) {
+    clearCodeLoop(); // turning it off stops any running 持续协作 timers immediately
+    toast("已停止持续协作", "info");
+  }
+});
+$<HTMLInputElement>("#code-loop-mins").addEventListener("change", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  code.loopMins = isNaN(v) ? 2.5 : Math.min(60, Math.max(0.5, v));
+  (e.target as HTMLInputElement).value = String(code.loopMins);
   saveCode();
 });
 $("#code-add").addEventListener("click", () => {
