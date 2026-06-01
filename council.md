@@ -2,6 +2,27 @@
 
 > 项目的功能演进与关键决策记录（按时间倒序，最新在上）。
 
+## 2026-06-01
+
+### 发布 v0.1.0 安装包
+- 源码已 commit 并 push 到 `origin/main`（`1b910ab`）。
+- GitHub Release **v0.1.0**：挂了两个 macOS Apple Silicon (arm64) 安装包——`council_0.1.0_aarch64.dmg`（拖入应用程序）和 `council_0.1.0_macos_arm64.zip`（解压即用）。本地未签名，首次右键「打开」。
+- 打包命令：`npm run tauri build`；dmg 偶发失败是上次残留的临时 rw 镜像还挂着，先 `hdiutil detach` 卸掉再 build 即可。
+
+### 技能分类的最终形态
+- 分类**只用于技能库整理/筛选，不绑定到协作编程 Agent**（曾实现"分类绑定 Agent / 按分类过滤 chips"，但与设计冲突，已撤回——Agent 仍只看勾选的具体技能 + 默认技能）。
+- 归类入口：技能库大窗每张卡片底部的「分类」下拉（主路径，稳）；拖拽为辅（HTML5 DnD 用模块变量传被拖项，不靠 WKWebView 不可靠的 dataTransfer）。
+- 左侧技能栏顶部有**分类筛选 chip**（全部/各分类/未分类，动态）；勾选框 = 默认技能（不是删除，删除在「仓库」）。
+
+### 圆桌/流水线：codex / gemini 调不动的根因 + 修复
+- 这俩 CLI 在 **headless（圆桌/流水线走 `cli_run` 管道、无 tty、在 app 工作目录）+ 非信任目录** 下会拒绝运行：codex 报 `Not inside a trusted directory … --skip-git-repo-check`，gemini 报 `not running in a trusted directory … --skip-trust`。
+- 修复：预设参数改为 codex `exec --skip-git-repo-check`、gemini `-p --skip-trust`；并加一次性迁移自动给已配的补上。claude/grok 无此要求。
+- 只影响圆桌/流水线（headless）；协作编程/终端走交互 PTY，不受影响。
+
+### 协作编程：claude 启动卡在 bypass 确认 → 自动接受
+- `claude --dangerously-skip-permissions` 交互启动时弹一次性 "Bypass Permissions … ❯1. No / 2. Yes, I accept" 菜单，默认在「No」，不选就一直等（看着像启动不了）。
+- 修复：**监听 PTY 输出**，检测到菜单标志词（`confirm` + `exit`，因为 "Yes, I accept" 被光标转义码拆开匹配不到）后，自动发「↓」再「回车」选中「2. Yes」。靠"菜单已渲染"驱动、不是盲发定时（盲发会落在默认 No 上把它选退出）。只在「自动批准」勾选时生效。
+
 ## 2026-05-31
 
 ### 技能库支持拖拽分类（最新）
