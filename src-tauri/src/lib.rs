@@ -621,6 +621,24 @@ fn dir_exists(path: String) -> bool {
     Path::new(&expanded).is_dir()
 }
 
+// Save clipboard image bytes (sent from the frontend via navigator.clipboard.read) to a temp
+// PNG and return its path, so CLIs that don't read the clipboard themselves (codex / gemini)
+// can be handed the file path to reference. claude reads the clipboard natively, so it skips this.
+#[tauri::command]
+fn save_clip_image(bytes: Vec<u8>) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    if bytes.is_empty() {
+        return Err("empty image".to_string());
+    }
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("council_clip_{}.png", ts));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 // Native macOS folder picker via osascript (no extra dependency / dialog plugin). The
 // system dialog itself has a "New Folder" button, so this covers pick + create-in-place.
 // Returns None if the user cancels.
@@ -1052,6 +1070,7 @@ pub fn run() {
             resize_pty,
             close_pty,
             dir_exists,
+            save_clip_image,
             pick_folder,
             new_folder,
             fetch_url,

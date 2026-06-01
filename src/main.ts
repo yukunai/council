@@ -3213,6 +3213,30 @@ function shortCwd(cwd: string): string {
   return cwd.startsWith("/Users/") ? "~/" + cwd.split("/").slice(3).join("/") : cwd;
 }
 
+// ⌘V with an image on the clipboard (no text): claude reads the clipboard natively, so we leave
+// it alone; for CLIs that don't (codex / gemini / grok …) we save the image to a temp PNG and type
+// its path into the terminal (gemini references files with @, so prefix it there).
+async function pasteClipboardImage(program: string, sid: string) {
+  if (program === "claude") return; // claude handles image paste itself
+  try {
+    const items = await navigator.clipboard.read();
+    for (const it of items) {
+      const type = it.types.find((t) => t.startsWith("image/"));
+      if (!type) continue;
+      const blob = await it.getType(type);
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const path = await invoke<string>("save_clip_image", { bytes: Array.from(buf) });
+      if (!path) return;
+      const ref = program === "gemini" ? `@${path} ` : `${path} `;
+      await invoke("write_pty", { id: sid, data: ref }).catch(() => {});
+      toast(`已粘贴图片路径：${path.split("/").pop()}`, "info");
+      return;
+    }
+  } catch {
+    /* no image / no clipboard permission */
+  }
+}
+
 // One terminal session (a tab). Shows a launcher until a program is started.
 class Term {
   id = `t${++termSeq}`;
@@ -3376,10 +3400,15 @@ class Term {
         return false;
       }
       if (e.key === "v") {
+        const sid0 = sid;
+        const prog = this.program;
         navigator.clipboard
           .readText()
-          .then((t) => t && term.paste(t))
-          .catch(() => {});
+          .then((t) => {
+            if (t) term.paste(t);
+            else pasteClipboardImage(prog, sid0); // no text → maybe an image
+          })
+          .catch(() => pasteClipboardImage(prog, sid0));
         return false;
       }
       return true;
