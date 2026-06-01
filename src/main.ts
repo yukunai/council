@@ -8,6 +8,7 @@ import {
   parseModels,
   parseArgs,
   fillTemplate,
+  stepDeps,
   skillBody,
   cnLen,
   splitGeo,
@@ -1058,10 +1059,22 @@ async function runSteps(my: number) {
   }
   if (my !== genId) return;
 
-  for (let i = 0; i < steps.length; i++) {
-    if (my !== genId) break;
+  // Dependency-aware parallel execution: a step runs as soon as every earlier step it references
+  // (via {{prev}} / {{N}}) has finished, so steps that only read {{input}} run concurrently in the
+  // first wave. A pure linear chain (each step uses {{prev}}) yields a full dependency chain and
+  // therefore stays fully serial — identical to the old behaviour, zero regression.
+  const deps = steps.map((s, i) => stepDeps(s.prompt, i));
+  // Build every card up front (in step order) so the display order matches the pipeline even when
+  // later steps finish first; they sit as 排队中 until their turn.
+  const cards = steps.map((s, i) => makeResultCard(s, i + 1));
+  cards.forEach((c) => c.setStatus("", "排队中…"));
+  const done = new Array<boolean>(steps.length).fill(false);
+  const failed = new Array<boolean>(steps.length).fill(false);
+
+  const runStep = async (i: number) => {
+    if (my !== genId) return;
     const step = steps[i];
-    const card = makeResultCard(step, i + 1);
+    const card = cards[i];
     card.setStatus("running", "运行中…");
     const skillText = step.skill ? bodies[step.skill] ?? "" : "";
     const system = [skillText, step.role].map((x) => x.trim()).filter(Boolean).join("\n\n");
@@ -1098,15 +1111,45 @@ async function runSteps(my: number) {
       // downstream steps can reference the video URL via {{prev}} / {{N}}
       textFlush.flush();
       outputs[i] = videoUrl || acc;
+      done[i] = true;
       card.setStatus("done", my !== genId ? "已停止" : "完成");
     } catch (e) {
       textFlush.cancel();
-      if (my !== genId) break;
+      failed[i] = true;
+      if (my !== genId) return;
       card.body.classList.add("error");
       card.body.textContent = e instanceof Error ? e.message : String(e);
       card.setStatus("error", "出错");
-      break;
     }
+  };
+
+  // A step whose upstream failed/was skipped can never get its input — skip it (transitively),
+  // but independent branches keep running (the old code aborted the whole pipeline on first error).
+  const propagateSkips = () => {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let i = 0; i < steps.length; i++) {
+        if (done[i] || failed[i]) continue;
+        if (deps[i].some((d) => failed[d])) {
+          failed[i] = true;
+          cards[i].setStatus("error", "上游出错，已跳过");
+          changed = true;
+        }
+      }
+    }
+  };
+
+  // Run wave by wave: each wave = every not-yet-run step whose deps are all done.
+  while (my === genId) {
+    propagateSkips();
+    const ready: number[] = [];
+    for (let i = 0; i < steps.length; i++) {
+      if (done[i] || failed[i]) continue;
+      if (deps[i].every((d) => done[d])) ready.push(i);
+    }
+    if (!ready.length) break;
+    await Promise.all(ready.map((i) => runStep(i)));
   }
 
   if (my === genId && outputs.some((o) => o && o.trim())) {

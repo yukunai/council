@@ -3,6 +3,7 @@ import {
   parseModels,
   parseArgs,
   fillTemplate,
+  stepDeps,
   skillBody,
   cnLen,
   splitGeo,
@@ -33,6 +34,22 @@ describe("fillTemplate", () => {
   });
   it("falls back gracefully for missing refs", () => {
     expect(fillTemplate("{{3}}", "in", ["o1"], 0)).toBe("");
+  });
+});
+
+describe("stepDeps", () => {
+  it("no upstream dep when only {{input}} / literal", () => {
+    expect(stepDeps("分析 {{input}}", 2)).toEqual([]);
+    expect(stepDeps("固定文本", 1)).toEqual([]);
+  });
+  it("{{prev}} depends on the immediately preceding step (idx-1)", () => {
+    expect(stepDeps("{{prev}}", 3)).toEqual([2]);
+    expect(stepDeps("{{prev}}", 0)).toEqual([]); // first step: prev is input, not a dep
+  });
+  it("{{N}} is 1-based; only backward refs count, de-duped + sorted", () => {
+    expect(stepDeps("{{1}} 和 {{3}}", 4)).toEqual([0, 2]);
+    expect(stepDeps("{{prev}} {{2}} {{2}}", 3)).toEqual([1, 2]); // prev=2, {{2}}=1
+    expect(stepDeps("{{5}}", 2)).toEqual([]); // forward/self ref ignored
   });
 });
 

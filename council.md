@@ -119,3 +119,9 @@
 ### 终端：codex/gemini 也能粘贴图片（存临时文件 + 给路径）
 - 根因：claude 自己读系统剪贴板的图片（原生支持），codex/gemini 不读，而我们的 ⌘V 只处理文字、把图片忽略了。
 - 修：⌘V 时若剪贴板无文字、是图片 → 前端 navigator.clipboard.read() 取图片 blob → Rust 新命令 save_clip_image 存成临时 PNG → 把路径打进终端（gemini 用 @path，其它用裸路径）。claude 不动，保持原生粘贴。
+
+### 流水线：依赖感知并行执行（借 gstack autoplan 的洞见）
+- 之前 `run()` 用 `for` 串行跑所有步骤，即使第 2/3/4 步只引用 `{{input}}`（各自独立分析同一输入）也被一个个跑。
+- 新增纯函数 `stepDeps(tpl, idx)`（utils.ts，含测试）：从模板算上游依赖——`{{prev}}`→idx-1、`{{N}}`→N-1（只算 < idx 的反向引用），只有 `{{input}}` = 无依赖。
+- runSteps 改成**按依赖分波并行**：先建好全部卡片（保持顺序，排队中），每波跑所有"依赖已完成"的步骤（Promise.all 并发，各自 stream）。纯链式（每步 `{{prev}}`）自动退化全串行，零回归；扇出型省时间。
+- 顺带更健壮：某步出错只跳过依赖它的下游（transitive），独立分支照常跑完——旧代码是一出错 `break` 整条停。

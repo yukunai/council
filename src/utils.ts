@@ -20,6 +20,22 @@ export function fillTemplate(tpl: string, input: string, outputs: string[], idx:
     .replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n: string) => outputs[parseInt(n, 10) - 1] ?? "");
 }
 
+// Upstream step indices (0-based) that a pipeline step depends on, derived from its template:
+// {{prev}} → the immediately preceding step (idx-1); {{N}} → step N (1-based). {{input}} adds no
+// dependency. Only backward refs (< idx) count, since outputs only holds earlier steps. The
+// pipeline runner uses this to run independent steps concurrently (dependency-aware waves)
+// instead of strictly serially; a pure linear chain (every step uses {{prev}}) yields a full
+// chain of deps and therefore stays serial.
+export function stepDeps(tpl: string, idx: number): number[] {
+  const deps = new Set<number>();
+  if (idx > 0 && /\{\{\s*prev\s*\}\}/.test(tpl)) deps.add(idx - 1);
+  for (const m of tpl.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+    const j = parseInt(m[1], 10) - 1; // {{N}} is 1-based
+    if (j >= 0 && j < idx) deps.add(j);
+  }
+  return [...deps].sort((a, b) => a - b);
+}
+
 // Strip YAML frontmatter from a SKILL.md (or any MD with --- ... --- header), leaving the instruction body.
 // Also strips a leading BOM if present.
 export function skillBody(content: string): string {
