@@ -22,12 +22,12 @@ import { applyI18n, t, tf, getLang, setLang, LANGS, type Lang } from "./i18n";
 // Registered first so it catches throws during the rest of module evaluation.
 window.addEventListener("error", (e) => {
   const el = document.querySelector(".tagline");
-  if (el) el.textContent = "脚本错误：" + (e.message || "见控制台");
+  if (el) el.textContent = tf("err.script", { msg: e.message || t("err.seeConsole") });
 });
 window.addEventListener("unhandledrejection", (e) => {
   const r = (e as PromiseRejectionEvent).reason;
   const el = document.querySelector(".tagline");
-  if (el) el.textContent = "未处理错误：" + ((r && (r.message || r)) || "见控制台");
+  if (el) el.textContent = tf("err.unhandled", { msg: (r && (r.message || r)) || t("err.seeConsole") });
 });
 
 // Mirrors the Rust StreamEvent enum (serde tag = "type", lowercase variants).
@@ -342,6 +342,11 @@ function allCategories(): string[] {
   const used = skills.map((s) => s.category.trim()).filter(Boolean);
   return [...new Set([...used, ...customCategories])].sort((a, b) => a.localeCompare(b, "zh"));
 }
+// "全部" / "未分类" double as logical category keys (compared against persisted state), so they
+// stay Chinese internally; this maps just the display label for the current language.
+function catLabel(c: string): string {
+  return c === "全部" ? t("cat.all") : c === "未分类" ? t("cat.uncategorized") : c;
+}
 // Merge over defaults so a geo object persisted by an older build (missing newer
 // fields like source/material/image) doesn't blow up on access.
 let geo: GeoState = { ...DEFAULT_GEO, ...load(LS_GEO, {}) };
@@ -568,7 +573,7 @@ function saveCodeHist() {
 }
 function pushCodeTask() {
   if (!code.task.trim() && !code.dir.trim()) return;
-  const title = (code.task.trim().split("\n").find((l) => l.trim()) || code.dir.trim() || "未命名任务").slice(0, 50);
+  const title = (code.task.trim().split("\n").find((l) => l.trim()) || code.dir.trim() || t("ch.untitledTask")).slice(0, 50);
   const snap: CodeTask = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     at: Date.now(),
@@ -601,14 +606,15 @@ interface HistEntry {
 }
 const LS_HISTORY = "council.history";
 let history: HistEntry[] = load(LS_HISTORY, []);
-const MODE_LABEL: Record<string, string> = { pipe: "流水线", geo: "单篇", rt: "圆桌", code: "协作编程" };
+// Maps a run's mode to its i18n key (resolved via t() at display time in the history list).
+const MODE_LABEL: Record<string, string> = { pipe: "mode.pipe", geo: "mode.geo", rt: "mode.rt", code: "mode.code" };
 function pushHistory(mode: string, title: string, md: string) {
   if (!md.trim()) return;
   history.unshift({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     time: Date.now(),
     mode,
-    title: title.trim().slice(0, 60) || "(无题)",
+    title: title.trim().slice(0, 60) || t("hist.untitled"),
     md,
   });
   if (history.length > 50) history.length = 50;
@@ -738,7 +744,7 @@ function renderSteps() {
     const title = document.createElement("input");
     title.className = "step-title";
     title.value = step.title;
-    title.placeholder = "这一步做什么";
+    title.placeholder = t("step.titlePh");
     title.addEventListener("input", () => {
       step.title = title.value;
       saveSteps();
@@ -755,7 +761,7 @@ function renderSteps() {
     const del = document.createElement("button");
     del.className = "step-del danger";
     del.textContent = "✕";
-    del.title = "删除这一步";
+    del.title = t("step.delTitle");
     del.addEventListener("click", () => {
       steps.splice(i, 1);
       saveSteps();
@@ -769,11 +775,11 @@ function renderSteps() {
     skillRow.className = "step-row";
     const skillLabel = document.createElement("span");
     skillLabel.className = "wfbar-label";
-    skillLabel.textContent = "技能";
+    skillLabel.textContent = t("nav.skills");
     const skill = document.createElement("select");
     skill.className = "col";
     fillSelect(skill, skills.map((s) => ({ value: s.name, label: s.name })), step.skill ?? "", {
-      none: "（不挂技能）",
+      none: t("sel.noSkill"),
     });
     skill.addEventListener("change", () => {
       step.skill = skill.value || undefined;
@@ -784,7 +790,7 @@ function renderSteps() {
     const role = document.createElement("input");
     role.className = "step-role";
     role.value = step.role;
-    role.placeholder = "角色 / 系统提示（可留空；挂了技能会叠加在前面）";
+    role.placeholder = t("step.rolePh");
     role.addEventListener("input", () => {
       step.role = role.value;
       saveSteps();
@@ -793,7 +799,7 @@ function renderSteps() {
     const prompt = document.createElement("textarea");
     prompt.rows = 4;
     prompt.value = step.prompt;
-    prompt.placeholder = "指令，可用 {{input}} {{prev}} {{1}} 引用素材或上游输出";
+    prompt.placeholder = t("step.promptPh");
     prompt.addEventListener("input", () => {
       step.prompt = prompt.value;
       saveSteps();
@@ -1025,8 +1031,8 @@ function makeResultCard(
 ): { body: HTMLDivElement; setStatus: (s: string, label: string) => void } {
   const worker = document.createElement("span");
   worker.className = "result-worker";
-  worker.textContent = workerLabel(step.worker) + (step.skill ? ` · 技能:${step.skill}` : "");
-  const { body, setStatus } = cardShell(`${n}. ${step.title || "(未命名)"}`, { extras: [worker] });
+  worker.textContent = workerLabel(step.worker) + (step.skill ? ` · ${tf("card.skillTag", { name: step.skill })}` : "");
+  const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras: [worker] });
   return { body, setStatus };
 }
 
@@ -1068,7 +1074,7 @@ async function runSteps(my: number) {
   // Build every card up front (in step order) so the display order matches the pipeline even when
   // later steps finish first; they sit as 排队中 until their turn.
   const cards = steps.map((s, i) => makeResultCard(s, i + 1));
-  cards.forEach((c) => c.setStatus("", "排队中…"));
+  cards.forEach((c) => c.setStatus("", t("status.queued")));
   const done = new Array<boolean>(steps.length).fill(false);
   const failed = new Array<boolean>(steps.length).fill(false);
 
@@ -1076,7 +1082,7 @@ async function runSteps(my: number) {
     if (my !== genId) return;
     const step = steps[i];
     const card = cards[i];
-    card.setStatus("running", "运行中…");
+    card.setStatus("running", t("status.running"));
     const skillText = step.skill ? bodies[step.skill] ?? "" : "";
     const system = [skillText, step.role].map((x) => x.trim()).filter(Boolean).join("\n\n");
     const prompt = fillTemplate(step.prompt, input, outputs, i);
@@ -1104,7 +1110,7 @@ async function runSteps(my: number) {
           link.className = "result-link";
           link.href = url;
           link.target = "_blank";
-          link.textContent = "视频链接（24 小时内有效，记得下载）";
+          link.textContent = t("video.link");
           card.body.append(video, link);
           scheduleScroll();
         },
@@ -1113,14 +1119,14 @@ async function runSteps(my: number) {
       textFlush.flush();
       outputs[i] = videoUrl || acc;
       done[i] = true;
-      card.setStatus("done", my !== genId ? "已停止" : "完成");
+      card.setStatus("done", my !== genId ? t("status.stopped") : t("status.done"));
     } catch (e) {
       textFlush.cancel();
       failed[i] = true;
       if (my !== genId) return;
       card.body.classList.add("error");
       card.body.textContent = e instanceof Error ? e.message : String(e);
-      card.setStatus("error", "出错");
+      card.setStatus("error", t("status.error"));
     }
   };
 
@@ -1134,7 +1140,7 @@ async function runSteps(my: number) {
         if (done[i] || failed[i]) continue;
         if (deps[i].some((d) => failed[d])) {
           failed[i] = true;
-          cards[i].setStatus("error", "上游出错，已跳过");
+          cards[i].setStatus("error", t("status.upstreamSkipped"));
           changed = true;
         }
       }
@@ -1157,7 +1163,7 @@ async function runSteps(my: number) {
     const md =
       `# 流水线\n\n**输入**\n\n${input || "(空)"}\n` +
       steps.map((s, i) => `\n\n## ${i + 1}. ${s.title || "(未命名)"}\n\n${outputs[i] ?? ""}`).join("");
-    pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || "流水线", md);
+    pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || t("mode.pipe"), md);
   }
 }
 
@@ -1196,9 +1202,9 @@ function settingsHead(name: string, onName: (v: string) => void, onDelete: () =>
   row.className = "step-row";
   const del = document.createElement("button");
   del.className = "danger";
-  del.textContent = "删除";
+  del.textContent = t("wf.del");
   del.addEventListener("click", onDelete);
-  row.append(fieldCol("名称", name, onName, { col: true }), del);
+  row.append(fieldCol(t("field.name"), name, onName, { col: true }), del);
   return row;
 }
 
@@ -1219,18 +1225,18 @@ function renderProviders() {
     const testStatus = document.createElement("span");
     testStatus.className = "test-status";
     const testBtn = document.createElement("button");
-    testBtn.textContent = "测试连通";
+    testBtn.textContent = t("set.testConn");
     testBtn.addEventListener("click", () => testProvider(p, testStatus));
     box.append(
       settingsHead(p.name, (v) => (p.name = v), () => {
         providers.splice(i, 1);
         renderProviders();
       }),
-      fieldCol("Endpoint（到 /chat/completions）", p.endpoint, (v) => (p.endpoint = v), {
+      fieldCol(t("field.endpointChat"), p.endpoint, (v) => (p.endpoint = v), {
         placeholder: "https://api.deepseek.com/chat/completions",
       }),
       fieldCol("API Key", p.key, (v) => (p.key = v), { type: "password", placeholder: "sk-…" }),
-      fieldCol("模型（每行一个）", p.models, (v) => (p.models = v), { rows: 3 }),
+      fieldCol(t("field.modelsMulti"), p.models, (v) => (p.models = v), { rows: 3 }),
       fieldRow(testBtn, testStatus),
     );
     providersList.appendChild(box);
@@ -1246,15 +1252,15 @@ function renderClis() {
     const testStatus = document.createElement("span");
     testStatus.className = "test-status";
     const testBtn = document.createElement("button");
-    testBtn.textContent = "测试运行";
+    testBtn.textContent = t("set.testRun");
     testBtn.addEventListener("click", () => testCli(c, testStatus));
     box.append(
       settingsHead(c.name, (v) => (c.name = v), () => {
         clis.splice(i, 1);
         renderClis();
       }),
-      fieldCol("程序名", c.program, (v) => (c.program = v), { placeholder: "claude" }),
-      fieldCol("固定参数（指令会作为最后一个参数追加）", c.args, (v) => (c.args = v), { placeholder: "-p" }),
+      fieldCol(t("field.program"), c.program, (v) => (c.program = v), { placeholder: "claude" }),
+      fieldCol(t("field.fixedArgs"), c.args, (v) => (c.args = v), { placeholder: "-p" }),
       fieldRow(testBtn, testStatus),
     );
     clisList.appendChild(box);
@@ -1272,15 +1278,15 @@ function renderVideos() {
         videos.splice(i, 1);
         renderVideos();
       }),
-      fieldCol("创建任务 Endpoint", v.endpoint, (s) => (v.endpoint = s), {
+      fieldCol(t("field.taskEndpoint"), v.endpoint, (s) => (v.endpoint = s), {
         placeholder: "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
       }),
       fieldCol("API Key", v.key, (s) => (v.key = s), { type: "password" }),
-      fieldCol("模型（每行一个）", v.models, (s) => (v.models = s), { rows: 2 }),
+      fieldCol(t("field.modelsMulti"), v.models, (s) => (v.models = s), { rows: 2 }),
       fieldRow(
-        fieldCol("分辨率", v.resolution, (s) => (v.resolution = s), { placeholder: "1080p", col: true }),
-        fieldCol("比例", v.ratio, (s) => (v.ratio = s), { placeholder: "16:9", col: true }),
-        fieldCol("时长(秒)", v.duration, (s) => (v.duration = s), { placeholder: "5", col: true }),
+        fieldCol(t("field.resolution"), v.resolution, (s) => (v.resolution = s), { placeholder: "1080p", col: true }),
+        fieldCol(t("field.ratio"), v.ratio, (s) => (v.ratio = s), { placeholder: "16:9", col: true }),
+        fieldCol(t("field.duration"), v.duration, (s) => (v.duration = s), { placeholder: "5", col: true }),
       ),
     );
     videosList.appendChild(box);
@@ -1298,12 +1304,12 @@ function renderImages() {
         images.splice(i, 1);
         renderImages();
       }),
-      fieldCol("Endpoint（images/generations）", v.endpoint, (s) => (v.endpoint = s), {
+      fieldCol(t("field.endpointImg"), v.endpoint, (s) => (v.endpoint = s), {
         placeholder: "https://ark.cn-beijing.volces.com/api/v3/images/generations",
       }),
       fieldCol("API Key", v.key, (s) => (v.key = s), { type: "password" }),
-      fieldCol("模型（每行一个）", v.models, (s) => (v.models = s), { rows: 2 }),
-      fieldCol("尺寸", v.size, (s) => (v.size = s), { placeholder: "1024x1024" }),
+      fieldCol(t("field.modelsMulti"), v.models, (s) => (v.models = s), { rows: 2 }),
+      fieldCol(t("field.size"), v.size, (s) => (v.size = s), { placeholder: "1024x1024" }),
     );
     imagesList.appendChild(box);
   });
@@ -1312,17 +1318,17 @@ function renderImages() {
 // ---- connection tests ----
 function testProvider(p: Provider, statusEl: HTMLElement) {
   const model = parseModels(p.models)[0];
-  if (!p.endpoint.trim()) return setTest(statusEl, "error", "没填 Endpoint");
-  if (!p.key.trim()) return setTest(statusEl, "error", "没填 API Key");
-  if (!model) return setTest(statusEl, "error", "没填模型");
+  if (!p.endpoint.trim()) return setTest(statusEl, "error", t("test.noEndpoint"));
+  if (!p.key.trim()) return setTest(statusEl, "error", t("test.noKey"));
+  if (!model) return setTest(statusEl, "error", t("test.noModel"));
 
-  setTest(statusEl, "running", "测试中…");
+  setTest(statusEl, "running", t("test.testing"));
   let got = false;
   const channel = new Channel<StreamEvent>();
   channel.onmessage = (ev) => {
     if (ev.type === "delta") got = true;
     else if (ev.type === "done")
-      setTest(statusEl, "ok", got ? `✓ 通了（${model}）` : "✓ 连上了，但没返回内容");
+      setTest(statusEl, "ok", got ? tf("test.okModel", { model }) : t("test.okNoContent"));
     else if (ev.type === "error") setTest(statusEl, "error", "✗ " + ev.message.slice(0, 240));
   };
   invoke("chat_stream", {
@@ -1335,13 +1341,13 @@ function testProvider(p: Provider, statusEl: HTMLElement) {
 }
 
 function testCli(c: Cli, statusEl: HTMLElement) {
-  if (!c.program.trim()) return setTest(statusEl, "error", "没填程序名");
-  setTest(statusEl, "running", "运行中…");
+  if (!c.program.trim()) return setTest(statusEl, "error", t("test.noProgram"));
+  setTest(statusEl, "running", t("status.running"));
   let got = false;
   const channel = new Channel<StreamEvent>();
   channel.onmessage = (ev) => {
     if (ev.type === "delta") got = true;
-    else if (ev.type === "done") setTest(statusEl, "ok", got ? "✓ 跑通了" : "✓ 退出正常，无输出");
+    else if (ev.type === "done") setTest(statusEl, "ok", got ? t("test.cliOk") : t("test.cliOkNoOut"));
     else if (ev.type === "error") setTest(statusEl, "error", "✗ " + ev.message.slice(0, 240));
   };
   invoke("cli_run", {
@@ -1399,13 +1405,13 @@ function marketCard(
   const add = document.createElement("button");
   add.className = "market-add";
   if (opts.soon) {
-    add.textContent = "不可用";
+    add.textContent = t("market.unavailable");
     add.disabled = true;
   } else if (opts.already) {
-    add.textContent = "已添加";
+    add.textContent = t("market.added");
     add.disabled = true;
   } else {
-    add.textContent = "＋ 添加";
+    add.textContent = t("market.add");
     add.addEventListener("click", () => opts.onAdd?.());
   }
   item.append(info, add);
@@ -1419,7 +1425,7 @@ function renderMarket() {
       name: preset.name,
       rows: [
         { text: preset.endpoint, cls: "market-ep" },
-        { text: preset.models ? "模型：" + parseModels(preset.models).join("、") : "", cls: "market-models" },
+        { text: preset.models ? tf("market.models", { list: parseModels(preset.models).join("、") }) : "", cls: "market-models" },
         { text: preset.note ?? "", cls: "market-note" },
       ],
       already: providers.some((p) => p.name === preset.name),
@@ -1438,7 +1444,7 @@ function renderMarket() {
     marketCard(marketCliList, {
       name: preset.name,
       rows: [
-        { text: `${preset.program} ${preset.args} <指令>`.trim(), cls: "market-ep" },
+        { text: `${preset.program} ${preset.args} ${t("market.cmdPlaceholder")}`.trim(), cls: "market-ep" },
         { text: preset.note ?? "", cls: "market-note" },
       ],
       already: clis.some((c) => c.name === preset.name),
@@ -1458,7 +1464,7 @@ function renderMarket() {
       rows: [
         { text: preset.endpoint, cls: "market-ep" },
         {
-          text: `模型：${parseModels(preset.models).join("、")} · ${preset.resolution} ${preset.ratio} ${preset.duration}s`,
+          text: `${tf("market.models", { list: parseModels(preset.models).join("、") })} · ${preset.resolution} ${preset.ratio} ${preset.duration}s`,
           cls: "market-models",
         },
       ],
@@ -1478,7 +1484,7 @@ function renderMarket() {
       name: preset.name,
       rows: [
         { text: preset.endpoint, cls: "market-ep" },
-        { text: `模型：${parseModels(preset.models).join("、")} · ${preset.size}`, cls: "market-models" },
+        { text: `${tf("market.models", { list: parseModels(preset.models).join("、") })} · ${preset.size}`, cls: "market-models" },
       ],
       already: images.some((v) => v.name === preset.name),
       onAdd: () => {
@@ -1513,13 +1519,13 @@ function renderSkills() {
   if (skills.length === 0) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
-    empty.textContent = "还没有技能。点「＋ 新建」或「⇄ 仓库」下载。";
+    empty.textContent = t("skills.empty");
     skillsListEl.appendChild(empty);
     return;
   }
   const note = document.createElement("div");
   note.className = "sidebar-note";
-  note.textContent = "勾选 = 默认技能（协作编程自动带上）。终端里用 ⚡技能 随时调用。✎ 改名，删除在「仓库」。";
+  note.textContent = t("skills.checkNote");
   skillsListEl.appendChild(note);
 
   // Category filter tags (dynamic: 全部 + whatever categories exist + 未分类 if any).
@@ -1530,7 +1536,7 @@ function renderSkills() {
   for (const c of cats) {
     const chip = document.createElement("button");
     chip.className = "skill-cat-chip" + (c === sidebarCat ? " active" : "");
-    chip.textContent = c;
+    chip.textContent = catLabel(c);
     chip.addEventListener("click", () => {
       sidebarCat = c;
       renderSkills();
@@ -1551,7 +1557,7 @@ function renderSkills() {
     cb.type = "checkbox";
     cb.className = "skill-check";
     cb.checked = defaultSkills.includes(s.name);
-    cb.title = "勾选 = 默认技能";
+    cb.title = t("skill.checkTitle");
     cb.addEventListener("click", (e) => e.stopPropagation());
     cb.addEventListener("change", () => {
       if (cb.checked) {
@@ -1569,14 +1575,14 @@ function renderSkills() {
     name.textContent = s.name;
     const desc = document.createElement("div");
     desc.className = "skill-desc";
-    desc.textContent = s.description || "（无描述）";
+    desc.textContent = s.description || t("skill.noDesc");
     txt.append(name, desc);
     txt.addEventListener("click", () => openSkillEditor(s.name));
 
     const edit = document.createElement("button");
     edit.className = "skill-edit mini";
     edit.textContent = "✎";
-    edit.title = "编辑这条技能";
+    edit.title = t("skill.editTitle");
     edit.addEventListener("click", (e) => {
       e.stopPropagation();
       openSkillEditor(s.name);
@@ -1593,7 +1599,7 @@ let resetSkillDel: () => void = () => {}; // resets the modal 删除 button's ar
 async function openSkillEditor(name: string | null) {
   resetSkillDel();
   editingSkill = name;
-  $("#skill-modal-title").textContent = name ? "编辑技能" : "新建技能";
+  $("#skill-modal-title").textContent = name ? t("skill.editTitle2") : t("skill.newTitle");
   const nameEl = $<HTMLInputElement>("#skill-name");
   const descEl = $<HTMLInputElement>("#skill-desc");
   const catEl = $<HTMLInputElement>("#skill-category");
@@ -1628,7 +1634,7 @@ async function saveSkill() {
   const description = $<HTMLInputElement>("#skill-desc").value;
   const category = $<HTMLInputElement>("#skill-category").value.trim();
   const body = $<HTMLTextAreaElement>("#skill-body").value;
-  if (!name) return toast("技能要有名字");
+  if (!name) return toast(t("toast.skillNeedsName"));
   try {
     await invoke("save_skill", { name, description, category, body });
     // renamed during edit → remove the old folder
@@ -1639,7 +1645,7 @@ async function saveSkill() {
     await refreshSkills();
     renderSteps();
   } catch (e) {
-    toast("保存失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.saveFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -1692,7 +1698,7 @@ async function doDeleteSkill(name: string) {
     await refreshSkills();
     renderSteps();
   } catch (e) {
-    toast("删除失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.deleteFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -1705,7 +1711,7 @@ function streamToOutput(command: string, payload: Record<string, unknown>): Prom
         syncOutput.textContent += ev.text;
         syncOutput.scrollTop = syncOutput.scrollHeight;
       } else if (ev.type === "done") {
-        syncOutput.textContent += "\n✓ 完成\n";
+        syncOutput.textContent += "\n✓ " + t("status.done") + "\n";
         resolve();
       } else if (ev.type === "error") {
         syncOutput.textContent += "\n✗ " + ev.message + "\n";
@@ -1726,8 +1732,8 @@ function setSyncBusy(busy: boolean) {
 
 async function downloadSkills() {
   const url = $<HTMLInputElement>("#sync-dl-url").value.trim();
-  if (!url) return toast("填一个仓库 URL");
-  syncOutput.textContent = "克隆中…（最多约 45 秒，认证卡住会自动超时）\n";
+  if (!url) return toast(t("toast.fillRepoUrl"));
+  syncOutput.textContent = t("sync.cloning") + "\n";
   setSyncBusy(true);
   try {
     await streamToOutput("skills_download", { url });
@@ -1743,8 +1749,8 @@ async function downloadSkills() {
 async function uploadSkills() {
   const url = $<HTMLInputElement>("#sync-up-url").value.trim();
   const message = $<HTMLInputElement>("#sync-up-msg").value;
-  if (!url) return toast("填上传目标仓库 URL");
-  syncOutput.textContent = "上传中…（最多约 45 秒，认证卡住会自动超时）\n";
+  if (!url) return toast(t("toast.fillUploadUrl"));
+  syncOutput.textContent = t("sync.uploading") + "\n";
   setSyncBusy(true);
   try {
     await streamToOutput("skills_upload", { url, message });
@@ -1765,7 +1771,7 @@ async function importLocalSkills(fileList: FileList | null) {
   const list = skillMds.length ? skillMds : all;
   syncOutput.textContent = "";
   if (!list.length) {
-    syncOutput.textContent = "没找到 .md / SKILL.md 文件\n";
+    syncOutput.textContent = t("sync.noMd") + "\n";
     return;
   }
   let ok = 0;
@@ -1794,7 +1800,7 @@ async function importLocalSkills(fileList: FileList | null) {
       syncOutput.textContent += `✗ ${f.name}：${e instanceof Error ? e.message : String(e)}\n`;
     }
   }
-  syncOutput.textContent += `\n导入完成：成功 ${ok} / ${list.length}\n`;
+  syncOutput.textContent += `\n${tf("sync.imported", { ok, total: list.length })}\n`;
   await refreshSkills();
   renderSteps();
 }
@@ -1813,7 +1819,7 @@ async function refreshWorkflowList() {
 async function saveWorkflow() {
   const name = wfNameEl.value.trim();
   if (!name) {
-    toast("先给工作流起个名");
+    toast(t("toast.nameWorkflow"));
     return;
   }
   const content = JSON.stringify({ input: inputEl.value, steps }, null, 2);
@@ -1821,9 +1827,9 @@ async function saveWorkflow() {
     const path = await invoke<string>("save_workflow", { name, content });
     await refreshWorkflowList();
     wfLoadEl.value = name;
-    flash(`已保存到 ${path}`);
+    flash(tf("flash.savedTo", { path }));
   } catch (e) {
-    toast("保存失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.saveFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -1838,21 +1844,21 @@ async function loadWorkflow(name: string) {
     wfNameEl.value = name;
     renderSteps();
   } catch (e) {
-    toast("载入失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.loadFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 
 async function deleteWorkflow() {
   const name = wfNameEl.value.trim();
-  if (!name) return toast("先选中一个工作流");
+  if (!name) return toast(t("toast.selectWorkflow"));
   try {
     await invoke("delete_workflow", { name });
     await refreshWorkflowList();
     wfNameEl.value = "";
     wfLoadEl.value = "";
-    flash(`已删除「${name}」`);
+    flash(tf("flash.deleted", { name }));
   } catch (e) {
-    toast("删除失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.deleteFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -1893,14 +1899,14 @@ function renderGeoParams() {
     const row = document.createElement("div");
     row.className = "geo-param-row";
     const k = document.createElement("input");
-    k.placeholder = "键，如 天气";
+    k.placeholder = t("geo.paramKeyPh");
     k.value = p.k;
     k.addEventListener("input", () => {
       p.k = k.value;
       saveGeo();
     });
     const v = document.createElement("input");
-    v.placeholder = "值，如 晴";
+    v.placeholder = t("geo.paramValPh");
     v.value = p.v;
     v.addEventListener("input", () => {
       p.v = v.value;
@@ -1948,7 +1954,7 @@ function renderGeoCards() {
     handle.textContent = "⠿";
     const num = document.createElement("span");
     num.className = "geo-card-num";
-    num.textContent = `第 ${i + 1} 站`;
+    num.textContent = tf("geo.cardNum", { n: i + 1 });
     const del = document.createElement("button");
     del.className = "danger mini";
     del.textContent = "✕";
@@ -1960,7 +1966,7 @@ function renderGeoCards() {
     head.append(handle, num, del);
 
     const place = document.createElement("input");
-    place.placeholder = "地名，如 法喜寺";
+    place.placeholder = t("geo.placePh");
     place.value = c.place;
     place.addEventListener("input", () => {
       c.place = place.value;
@@ -1968,7 +1974,7 @@ function renderGeoCards() {
     });
     const note = document.createElement("textarea");
     note.rows = 2;
-    note.placeholder = "随手记的素材：斋饭好吃，5 月玉兰花开，人多但清静";
+    note.placeholder = t("geo.cardNotePh");
     note.value = c.note;
     note.addEventListener("input", () => {
       c.note = note.value;
@@ -2002,7 +2008,7 @@ function refreshGeoSelectors() {
     changed = true;
   }
   fillSelect(sk, skills.map((s) => ({ value: s.name, label: s.name })), geo.skill, {
-    none: "（用内置 GEO 规范）",
+    none: t("geo.skillNone"),
   });
 
   // 配图来源: local CLIs (→ SVG) + HTTP image providers (→ real image)
@@ -2018,7 +2024,7 @@ function refreshGeoSelectors() {
     geo.image = "";
     changed = true;
   }
-  fillSelect(im, imgOpts, geo.image, { none: "（不配图）" });
+  fillSelect(im, imgOpts, geo.image, { none: t("geo.imageNone") });
   if (changed) saveGeo();
 }
 
@@ -2075,15 +2081,15 @@ function buildGeoBrief(): string {
 function makeGeoResultCard(title: string) {
   const copy = document.createElement("button");
   copy.className = "result-copy mini";
-  copy.textContent = "复制";
+  copy.textContent = t("btn.copy");
   const { body, setStatus } = cardShell(title, { extras: [copy] });
 
   let getText = () => body.textContent ?? "";
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(getText());
-      copy.textContent = "已复制";
-      setTimeout(() => (copy.textContent = "复制"), 1200);
+      copy.textContent = t("btn.copied");
+      setTimeout(() => (copy.textContent = t("btn.copy")), 1200);
     } catch {
       /* clipboard blocked */
     }
@@ -2134,10 +2140,13 @@ async function streamCard(
   let acc = "";
   const status = () => {
     const s = Math.round((Date.now() - t0) / 1000);
-    card.setStatus("running", acc ? `${verb}… 约 ${cnLen(acc)} 字 · ${s}s` : `${verb}… ${s}s`);
+    card.setStatus(
+      "running",
+      acc ? tf("sc.statusChars", { verb, n: cnLen(acc), s }) : tf("sc.statusTime", { verb, s }),
+    );
   };
   status();
-  card.streamText("⏳ 运行中…（headless CLI 如 claude -p 多在跑完后才一次性输出）");
+  card.streamText(t("sc.waiting"));
   const timer = window.setInterval(status, 1000);
   try {
     await run((t) => {
@@ -2151,16 +2160,17 @@ async function streamCard(
     clearInterval(timer);
     if (my !== genId) return null;
     card.setError(
-      "出错：" + (e instanceof Error ? e.message : String(e)) + (skippable ? "\n\n（已跳过这一位，继续下一位）" : ""),
+      tf("sc.errorPrefix", { msg: e instanceof Error ? e.message : String(e) }) +
+        (skippable ? t("sc.skippedNote") : ""),
     );
-    card.setStatus("error", skippable ? "出错 · 跳过" : "出错");
+    card.setStatus("error", skippable ? t("sc.errorSkipped") : t("status.error"));
     return null;
   }
   clearInterval(timer);
   if (my !== genId) return null;
   const text = acc.trim();
   card.setEditable(text);
-  card.setStatus("done", `${cnLen(text)} 字`);
+  card.setStatus("done", tf("sc.chars", { n: cnLen(text) }));
   return { text, getText: card.getText };
 }
 
@@ -2171,23 +2181,23 @@ async function generateImage(desc: string): Promise<ImgResult> {
   const w = geo.image;
   if (w.startsWith("cli::")) {
     const name = w.slice(5);
-    if (!clis.some((c) => c.name === name)) return { kind: "err", data: `找不到命令：${name}` };
+    if (!clis.some((c) => c.name === name)) return { kind: "err", data: tf("img.cliNotFound", { name }) };
     const prompt = `请为文章画一张配图，主题：${desc}。\n直接把一段完整 SVG 代码打印到标准输出：以 <svg 开头、以 </svg> 结尾，带 viewBox、宽约 800。画面简洁、有信息量，可含图形与少量文字标注。\n不要创建或修改任何文件、不要运行其他命令、不要任何解释、不要 markdown 代码块围栏，只输出 SVG 本身。`;
     let acc = "";
     await runWorker(w, "", prompt, (t) => (acc += t), () => {});
     const svg = extractSvg(acc);
     return svg
       ? { kind: "svg", data: svg }
-      : { kind: "err", data: `CLI 没产出 SVG（输出开头：${acc.slice(0, 120)}…）` };
+      : { kind: "err", data: tf("img.noSvg", { head: acc.slice(0, 120) }) };
   }
   if (w.startsWith("img::")) {
     const parts = w.split("::");
     const provider = parts[1] ?? "";
     const model = parts.slice(2).join("::");
     const p = images.find((x) => x.name === provider);
-    if (!p) return { kind: "err", data: `找不到图片源：${provider}` };
+    if (!p) return { kind: "err", data: tf("img.providerNotFound", { provider }) };
     if (!p.endpoint.trim() || !p.key.trim())
-      return { kind: "err", data: `图片源「${p.name}」缺 Endpoint 或 Key` };
+      return { kind: "err", data: tf("img.missingEndpointKey", { name: p.name }) };
     const url = await invoke<string>("image_generate", {
       endpoint: p.endpoint,
       apiKey: p.key,
@@ -2197,7 +2207,7 @@ async function generateImage(desc: string): Promise<ImgResult> {
     });
     return { kind: "url", data: url };
   }
-  return { kind: "err", data: "未选配图来源" };
+  return { kind: "err", data: t("img.noSource") };
 }
 
 // One image slot in the gallery: shows 生成中 / image / error+retry, independently.
@@ -2206,7 +2216,7 @@ interface ImgSlot {
   fill: (r: ImgResult, onRetry: () => void) => void;
 }
 function makeImageGallery() {
-  const { body, setStatus } = cardShell("配图");
+  const { body, setStatus } = cardShell(t("img.galleryTitle"));
   return {
     addSlot: (n: number, desc: string): ImgSlot => {
       const fig = document.createElement("figure");
@@ -2214,13 +2224,13 @@ function makeImageGallery() {
       const holder = document.createElement("div");
       const cap = document.createElement("figcaption");
       cap.className = "geo-cap";
-      cap.textContent = `配图 ${n}：${desc}`;
+      cap.textContent = tf("img.caption", { n, desc });
       fig.append(holder, cap);
       body.appendChild(fig);
 
       const pending = () => {
         holder.className = "geo-cap";
-        holder.textContent = `配图 ${n} 生成中…`;
+        holder.textContent = tf("img.generating", { n });
       };
       pending();
       const fill = (r: ImgResult, onRetry: () => void) => {
@@ -2240,15 +2250,15 @@ function makeImageGallery() {
           link.className = "result-link";
           link.href = r.data;
           link.target = "_blank";
-          link.textContent = "图片链接（记得及时下载）";
+          link.textContent = t("img.imgLink");
           holder.append(img, link);
         } else {
           const er = document.createElement("div");
           er.className = "result-body error";
-          er.textContent = `配图 ${n} 失败：${r.data}`;
+          er.textContent = tf("img.failed", { n, data: r.data });
           const retry = document.createElement("button");
           retry.className = "mini";
-          retry.textContent = "重试这张";
+          retry.textContent = t("img.retry");
           retry.style.marginTop = "6px";
           retry.addEventListener("click", () => {
             pending();
@@ -2274,13 +2284,13 @@ function makeExportToolbar(
 ) {
   const copy = document.createElement("button");
   copy.className = "mini";
-  copy.textContent = "复制全文";
+  copy.textContent = t("export.copyAll");
   const md = document.createElement("button");
   md.className = "mini primary";
-  md.textContent = "导出 .md";
+  md.textContent = t("export.md");
   const txt = document.createElement("button");
   txt.className = "mini";
-  txt.textContent = "导出 .txt";
+  txt.textContent = t("export.txt");
   const { setStatus } = cardShell(cardTitle, { extras: [copy, md, txt], prepend: true, body: false });
 
   const download = (text: string, ext: string, mime: string) => {
@@ -2292,15 +2302,15 @@ function makeExportToolbar(
     a.download = `${safe}${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    setStatus("done", "已导出");
+    setStatus("done", t("export.exported"));
     setTimeout(() => setStatus("done", ""), 1500);
   };
 
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(buildMarkdown());
-      copy.textContent = "已复制";
-      setTimeout(() => (copy.textContent = "复制全文"), 1200);
+      copy.textContent = t("btn.copied");
+      setTimeout(() => (copy.textContent = t("export.copyAll")), 1200);
     } catch {
       /* clipboard blocked */
     }
@@ -2312,7 +2322,7 @@ function makeExportToolbar(
 async function runGeo() {
   if (running) return;
   if (!geo.worker) {
-    toast("先选个模型（没有就去「模型市场」加一个）");
+    toast(t("toast.pickModel"));
     return;
   }
   const hasContent =
@@ -2322,7 +2332,7 @@ async function runGeo() {
     geo.route.trim() ||
     geo.cards.some((c) => c.place.trim() || c.note.trim());
   if (!hasContent) {
-    toast("至少填个标题、原文素材、链接，或路线/地点");
+    toast(t("toast.geoNeedContent"));
     return;
   }
 
@@ -2347,8 +2357,8 @@ async function runGeo() {
     sysParts.push(GEO_CONTRACT);
     const system = sysParts.join("\n\n");
 
-    card = makeGeoResultCard("正文（GEO 结构）");
-    card.setStatus("running", geo.source.trim() ? "读取链接中…" : "生成中…");
+    card = makeGeoResultCard(t("geo.bodyCardTitle"));
+    card.setStatus("running", geo.source.trim() ? t("geo.readingLink") : t("geo.generating"));
 
     // If a source URL was given, fetch its text and rewrite from it.
     let brief = buildGeoBrief();
@@ -2357,11 +2367,11 @@ async function runGeo() {
         const fetched = await invoke<string>("fetch_url", { url: geo.source.trim() });
         if (my !== genId) return;
         brief += `\n\n以下是参考链接的正文内容，请基于它改写成上面要求的文章（保留事实信息，重组结构、换表达、按 GEO 规则成文，不要逐句照抄）：\n"""\n${fetched.slice(0, 12000)}\n"""`;
-        card.setStatus("running", "生成中…");
+        card.setStatus("running", t("geo.generating"));
       } catch (e) {
         if (my !== genId) return;
-        card.setError("读取链接失败：" + (e instanceof Error ? e.message : String(e)));
-        card.setStatus("error", "出错");
+        card.setError(tf("geo.readLinkFailed", { msg: e instanceof Error ? e.message : String(e) }));
+        card.setStatus("error", t("status.error"));
         return;
       }
     }
@@ -2374,7 +2384,7 @@ async function runGeo() {
       (text) => {
         acc += text;
         card!.streamText(acc);
-        card!.setStatus("running", `生成中… 约 ${cnLen(acc)} 字`);
+        card!.setStatus("running", tf("geo.generatingChars", { n: cnLen(acc) }));
         scheduleScroll();
       },
       () => {
@@ -2397,12 +2407,12 @@ async function runGeo() {
       : article;
 
     card.setEditable(cleaned);
-    card.setStatus("done", `完成 · 约 ${cnLen(cleaned)} 字（目标 ${geo.length}）`);
+    card.setStatus("done", tf("geo.doneChars", { n: cnLen(cleaned), target: geo.length }));
     let tweetCard: ReturnType<typeof makeGeoResultCard> | null = null;
     if (tweet) {
-      tweetCard = makeGeoResultCard("小推文");
+      tweetCard = makeGeoResultCard(t("geo.tweetCardTitle"));
       tweetCard.setEditable(tweet);
-      tweetCard.setStatus("done", `${cnLen(tweet)} 字`);
+      tweetCard.setStatus("done", tf("sc.chars", { n: cnLen(tweet) }));
     }
 
     // Export bundles the (possibly edited) article, generated images and tweet into one .md.
@@ -2434,7 +2444,7 @@ async function runGeo() {
       return t + "\n";
     };
     const titleHint = geo.title.trim() || article.split("\n")[0].replace(/^#+\s*/, "").trim();
-    makeExportToolbar("整篇", titleHint, buildMarkdown, buildText);
+    makeExportToolbar(t("export.wholeArticle"), titleHint, buildMarkdown, buildText);
     pushHistory("geo", titleHint, buildMarkdown());
 
     // Generate an image per marker: HTTP image sources in parallel, local CLI serially
@@ -2456,22 +2466,22 @@ async function runGeo() {
         });
       };
       if (geo.image.startsWith("img::")) {
-        gal.setStatus("running", `并行生成 ${markers.length} 张配图…`);
+        gal.setStatus("running", tf("img.parallelGen", { n: markers.length }));
         await Promise.all(markers.map((_, i) => genInto(i)));
       } else {
         for (let i = 0; i < markers.length; i++) {
           if (my !== genId) return;
-          gal.setStatus("running", `配图 ${i + 1}/${markers.length}…`);
+          gal.setStatus("running", tf("img.progress", { i: i + 1, total: markers.length }));
           await genInto(i);
         }
       }
       if (my !== genId) return;
-      gal.setStatus("done", "配图完成");
+      gal.setStatus("done", t("img.galleryDone"));
     }
   } catch (e) {
     if (my === genId && card) {
       card.setError(e instanceof Error ? e.message : String(e));
-      card.setStatus("error", "出错");
+      card.setStatus("error", t("status.error"));
     }
   } finally {
     endRun(my);
@@ -2510,8 +2520,7 @@ function renderRtParticipants() {
   if (!rt.participants.length) {
     const note = document.createElement("div");
     note.className = "sidebar-note";
-    note.textContent =
-      "还没有参与模型。点「＋ 加一位」，至少加 2 个（最好不同厂商）才有讨论的意义；可给每位单独挂技能，扮演不同角色。";
+    note.textContent = t("rt.emptyNote");
     wrap.appendChild(note);
   }
   rt.participants.forEach((p, i) => {
@@ -2542,7 +2551,7 @@ function renderRtParticipants() {
     const wsel = document.createElement("select");
     const list =
       p.worker && !opts.some((o) => o.value === p.worker)
-        ? [...opts, { value: p.worker, label: `（已失效）${workerLabel(p.worker)}` }]
+        ? [...opts, { value: p.worker, label: tf("worker.invalid", { label: workerLabel(p.worker) }) }]
         : opts;
     fillSelect(wsel, list, p.worker);
     wsel.addEventListener("change", () => {
@@ -2564,10 +2573,10 @@ function renderRtParticipants() {
     skillRow.className = "rt-skill";
     const lab = document.createElement("span");
     lab.className = "wfbar-label";
-    lab.textContent = "技能";
+    lab.textContent = t("nav.skills");
     const ssel = document.createElement("select");
     if (p.skill && !skills.some((s) => s.name === p.skill)) p.skill = ""; // skill was deleted → clear
-    fillSelect(ssel, skills.map((s) => ({ value: s.name, label: s.name })), p.skill, { none: "（不挂技能）" });
+    fillSelect(ssel, skills.map((s) => ({ value: s.name, label: s.name })), p.skill, { none: t("sel.noSkill") });
     ssel.addEventListener("change", () => {
       p.skill = ssel.value;
       saveRt();
@@ -2607,11 +2616,11 @@ function renderRt() {
 
 async function runRoundtable() {
   if (running) return;
-  if (!rt.question.trim()) return toast("先填讨论的问题");
+  if (!rt.question.trim()) return toast(t("toast.fillQuestion"));
   const valid = new Set(chatWorkerOptions().map((o) => o.value));
   const parts = rt.participants.filter((p) => valid.has(p.worker));
-  if (parts.length < 2) return toast("至少选 2 个有效的参与模型");
-  if (!rt.moderator || !valid.has(rt.moderator)) return toast("先选一个有效的主持人（综述用）");
+  if (parts.length < 2) return toast(t("toast.rtNeed2"));
+  if (!rt.moderator || !valid.has(rt.moderator)) return toast(t("toast.rtNeedModerator"));
 
   const my = beginRun();
   try {
@@ -2650,13 +2659,13 @@ async function runRoundtable() {
         const prompt = first
           ? `问题：\n${Q}\n\n请给出你的回答：尽量完整、准确、有依据。`
           : `问题：\n${Q}\n\n目前的答案（由上一位参与者给出）：\n"""\n${draft}\n"""\n\n请在此基础上改进：补充遗漏、纠正错误或不准确之处、删去冗余空话，让答案更完整准确。直接输出改进后的【完整答案】，不要只写"我改了什么"，也不要加解释。`;
-        const heading = `第 ${r} 轮 · ${workerLabel(worker)}${skill ? ` · 技能:${skill}` : ""}`;
+        const heading = `${tf("rt.roundLabel", { r })} · ${workerLabel(worker)}${skill ? ` · ${tf("card.skillTag", { name: skill })}` : ""}`;
         const res = await contribute(
           heading,
           worker,
           system,
           prompt,
-          first ? "起草中" : "改进中",
+          first ? t("rt.verbDraft") : t("rt.verbImprove"),
           true, // skippable: a failed participant is skipped, not fatal
         );
         if (my !== genId) return; // 「停止」→ 整场中止
@@ -2672,20 +2681,20 @@ async function runRoundtable() {
 
     if (my !== genId) return;
     if (!transcript.length) {
-      toast("所有参与模型都没成功，没法综述——看各卡片的报错，多半是某个模型的参数 / Key 问题");
+      toast(t("toast.rtAllFailed"));
       return;
     }
     const tx = transcript
       .map((t) => `【第 ${t.round} 轮 · ${t.label}】\n${t.text.slice(0, 6000)}`)
       .join("\n\n");
     const modPrompt = `问题：\n${Q}\n\n以下是多个模型多轮接力改进的完整记录：\n\n${tx}\n\n请你作为主持人综述，用 Markdown 分三节：\n## 共识\n大家一致认可的结论。\n## 分歧与演变\n观点如何变化、还有哪些不同看法或未解的问题。\n## 最终建议\n综合各方，给出你认为最好的最终答案。`;
-    const modHeading = `主持人综述 · ${workerLabel(rt.moderator)}`;
+    const modHeading = `${t("rt.moderatorHeading")} · ${workerLabel(rt.moderator)}`;
     const modRes = await contribute(
       modHeading,
       rt.moderator,
       "你是这场多模型讨论的主持人，客观中立，善于提炼共识与分歧。",
       modPrompt,
-      "综述中",
+      t("rt.verbSynth"),
     );
     if (my !== genId) return;
     if (modRes) exportEntries.push({ heading: modHeading, getText: modRes.getText });
@@ -2702,8 +2711,8 @@ async function runRoundtable() {
       for (const e of exportEntries) s += `\n\n${bar}\n${e.heading}\n${bar}\n\n${e.getText().trim()}\n`;
       return s + "\n";
     };
-    makeExportToolbar("整场", rt.question.trim() || "圆桌讨论", buildMarkdown, buildText);
-    pushHistory("rt", rt.question.trim() || "圆桌讨论", buildMarkdown());
+    makeExportToolbar(t("export.wholeSession"), rt.question.trim() || t("rt.exportTitle"), buildMarkdown, buildText);
+    pushHistory("rt", rt.question.trim() || t("rt.exportTitle"), buildMarkdown());
   } catch (e) {
     if (my === genId) toast(e instanceof Error ? e.message : String(e));
   } finally {
@@ -2723,29 +2732,29 @@ function renderHistory() {
   listEl.innerHTML = "";
   // 协作编程 task snapshots live at the top — clicking one fills the 协作编程 form and jumps there
   // (they have no markdown result, so they don't use the right-hand viewer).
-  for (const t of codeHist) {
+  for (const task of codeHist) {
     const item = document.createElement("div");
     item.className = "history-item";
-    const d = new Date(t.at);
+    const d = new Date(task.at);
     const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     const title = document.createElement("span");
     title.className = "h-title";
-    title.textContent = t.title;
+    title.textContent = task.title;
     const meta = document.createElement("span");
     meta.className = "h-meta";
-    meta.textContent = `协作编程 · ${when}`;
+    meta.textContent = `${t("mode.code")} · ${when}`;
     const del = document.createElement("button");
     del.className = "danger mini h-del";
     del.textContent = "✕";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
-      codeHist = codeHist.filter((x) => x.id !== t.id);
+      codeHist = codeHist.filter((x) => x.id !== task.id);
       saveCodeHist();
       renderHistory();
     });
     item.append(title, meta, del);
     item.addEventListener("click", () => {
-      loadCodeTask(t);
+      loadCodeTask(task);
       historyModal.classList.add("hidden");
     });
     listEl.appendChild(item);
@@ -2753,14 +2762,14 @@ function renderHistory() {
   if (!history.length && !codeHist.length) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
-    empty.textContent = "还没有历史。跑一次任何模式就会自动存。";
+    empty.textContent = t("hist.empty");
     listEl.appendChild(empty);
     viewEl.textContent = "";
     historyViewId = null;
     return;
   }
   if (!history.length) {
-    viewEl.textContent = "← 点左边的协作编程任务即可填回表单继续。";
+    viewEl.textContent = t("hist.codeHint");
     historyViewId = null;
     return;
   }
@@ -2768,14 +2777,14 @@ function renderHistory() {
   for (const h of history) {
     const item = document.createElement("div");
     item.className = "history-item" + (h.id === historyViewId ? " active" : "");
-    const t = new Date(h.time);
-    const when = `${t.getMonth() + 1}-${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    const d = new Date(h.time);
+    const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     const title = document.createElement("span");
     title.className = "h-title";
     title.textContent = h.title;
     const meta = document.createElement("span");
     meta.className = "h-meta";
-    meta.textContent = `${MODE_LABEL[h.mode] ?? h.mode} · ${when}`;
+    meta.textContent = `${MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode} · ${when}`;
     const del = document.createElement("button");
     del.className = "danger mini h-del";
     del.textContent = "✕";
@@ -2811,9 +2820,9 @@ async function setSkillCategory(name: string, category: string) {
     const m = content.match(/^description:\s*(.*)$/m);
     await invoke("save_skill", { name, description: m ? m[1].trim() : "", category, body: skillBody(content) });
     await refreshSkills(); // re-renders sidebar + this modal
-    toast(`「${name}」已移到「${category || "未分类"}」`, "info");
+    toast(tf("toast.movedTo", { name, cat: category || t("cat.uncategorized") }), "info");
   } catch (e) {
-    toast("移动失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.moveFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 }
 function renderSkillsModal() {
@@ -2832,7 +2841,7 @@ function renderSkillsModal() {
   const addRow = document.createElement("div");
   addRow.className = "skl-cat-add";
   const addInput = document.createElement("input");
-  addInput.placeholder = "新建分类…";
+  addInput.placeholder = t("skl.newCatPh");
   const addBtn = document.createElement("button");
   addBtn.className = "mini";
   addBtn.textContent = "＋";
@@ -2857,7 +2866,7 @@ function renderSkillsModal() {
     const item = document.createElement("div");
     item.className = "skl-cat" + (c === sklCat ? " active" : "");
     const label = document.createElement("span");
-    label.textContent = c;
+    label.textContent = catLabel(c);
     const cnt = document.createElement("span");
     cnt.className = "skl-count";
     cnt.textContent = String(c === "全部" ? skills.length : counts.get(c) ?? 0);
@@ -2895,10 +2904,10 @@ function renderSkillsModal() {
     const e = document.createElement("div");
     e.className = "skl-empty";
     e.textContent = !skills.length
-      ? "技能库还是空的。点「＋ 新建技能」或「⇄ 仓库」。"
+      ? t("skl.emptyLib")
       : sklCat !== "全部" && sklCat !== "未分类"
-        ? `「${sklCat}」分类暂无技能——新建 / 编辑技能时把「分类」选成「${sklCat}」即可归入。`
-        : "没有匹配的技能。";
+        ? tf("skl.emptyCat", { cat: sklCat })
+        : t("skl.noMatch");
     gridEl.appendChild(e);
     return;
   }
@@ -2915,13 +2924,13 @@ function renderSkillsModal() {
     const edit = document.createElement("button");
     edit.className = "skill-edit mini";
     edit.textContent = "✎";
-    edit.title = "编辑";
+    edit.title = t("skl.edit");
     edit.addEventListener("click", () => openSkillEditor(s.name));
     const del = document.createElement("button");
     del.className = "skill-edit mini";
     del.textContent = "🗑";
-    del.title = "删除（点两下确认）";
-    twoStepDelete(del, "🗑", "确认?", () => void doDeleteSkill(s.name));
+    del.title = t("skl.delTitle");
+    twoStepDelete(del, "🗑", t("skl.confirm"), () => void doDeleteSkill(s.name));
     head.append(nm, edit, del);
     card.append(head);
     if (s.category.trim()) {
@@ -2932,22 +2941,22 @@ function renderSkillsModal() {
     }
     const desc = document.createElement("div");
     desc.className = "skl-card-desc";
-    desc.textContent = s.description || "（无描述）";
+    desc.textContent = s.description || t("skill.noDesc");
     card.append(desc);
 
     // Reliable (non-drag) way to move a skill into a category: a dropdown.
     const moveRow = document.createElement("div");
     moveRow.className = "skl-move-row";
     const moveLab = document.createElement("span");
-    moveLab.textContent = "分类";
+    moveLab.textContent = t("skl.category");
     const move = document.createElement("select");
     move.className = "skl-move";
-    move.title = "移动到分类";
+    move.title = t("skl.moveTo");
     const cur = s.category.trim();
     for (const cat of ["", ...allCategories()]) {
       const o = document.createElement("option");
       o.value = cat;
-      o.textContent = cat || "未分类";
+      o.textContent = cat || t("cat.uncategorized");
       if (cat === cur) o.selected = true;
       move.appendChild(o);
     }
@@ -2974,8 +2983,7 @@ function renderCodeAgents() {
   if (!code.agents.length) {
     const note = document.createElement("div");
     note.className = "sidebar-note";
-    note.textContent =
-      "还没有 Agent。点「＋ 加一位」加本地 CLI（Claude Code / Codex / Gemini / Grok），并给每位写明职责。HTTP 模型不能改文件，这里不列。";
+    note.textContent = t("code.emptyNote");
     wrap.appendChild(note);
   }
   code.agents.forEach((a, i) => {
@@ -3006,7 +3014,7 @@ function renderCodeAgents() {
     const sel = document.createElement("select");
     const list =
       a.worker && !opts.some((o) => o.value === a.worker)
-        ? [...opts, { value: a.worker, label: `（已失效）${workerLabel(a.worker)}` }]
+        ? [...opts, { value: a.worker, label: tf("worker.invalid", { label: workerLabel(a.worker) }) }]
         : opts;
     fillSelect(sel, list, a.worker);
     sel.addEventListener("change", () => {
@@ -3028,7 +3036,7 @@ function renderCodeAgents() {
     duty.className = "code-agent-duty";
     // Position-specific hint, so each row suggests a different job and an empty field
     // still reads as "this slot = this duty" (which is what actually runs — see runCoding).
-    duty.placeholder = `职责（留空则按「${DUTY_SUGGEST[i] ?? "审查与完善"}」）`;
+    duty.placeholder = tf("code.dutyPh", { duty: DUTY_SUGGEST[i] ?? t("code.dutyFallback") });
     duty.value = a.duty;
     duty.addEventListener("input", () => {
       a.duty = duty.value;
@@ -3041,12 +3049,12 @@ function renderCodeAgents() {
     skillRow.className = "skill-chips";
     const lab = document.createElement("span");
     lab.className = "wfbar-label";
-    lab.textContent = "技能";
+    lab.textContent = t("nav.skills");
     skillRow.appendChild(lab);
     if (!skills.length) {
       const none = document.createElement("span");
       none.className = "chips-empty";
-      none.textContent = "（技能库为空，去左边「技能」新建）";
+      none.textContent = t("code.skillsEmpty");
       skillRow.appendChild(none);
     }
     for (const s of skills) {
@@ -3077,7 +3085,7 @@ function renderCodeAgents() {
     llab.className = "wfbar-label";
     // 实现位：a.loopMins = 写完一步后等多少分钟没人介入再继续（默认 2）。
     // 审查/测试：a.loopMins = 巡检间隔（留空=用下方全局间隔）。
-    llab.textContent = isImplRow ? "写完一步等" : "巡检每";
+    llab.textContent = isImplRow ? t("code.loopImplPre") : t("code.loopScanPre");
     const mins = document.createElement("input");
     mins.type = "number";
     mins.min = "0.5";
@@ -3086,7 +3094,7 @@ function renderCodeAgents() {
     mins.className = "code-loop-mins";
     mins.value = a.loopMins != null ? String(a.loopMins) : "";
     mins.placeholder = isImplRow ? "2" : String(code.loopMins || 2.5);
-    mins.title = isImplRow ? "写完一步后，这么久没人插手就自动继续下一步" : "留空则用下方全局间隔";
+    mins.title = isImplRow ? t("code.loopImplTitle") : t("code.loopScanTitle");
     mins.addEventListener("change", () => {
       const v = parseFloat(mins.value);
       a.loopMins = mins.value.trim() === "" || isNaN(v) ? undefined : Math.min(60, Math.max(0.5, v));
@@ -3095,7 +3103,7 @@ function renderCodeAgents() {
     });
     const unit = document.createElement("span");
     unit.className = "wfbar-label";
-    unit.textContent = isImplRow ? "分钟没人介入再继续" : "分钟（留空=全局）";
+    unit.textContent = isImplRow ? t("code.loopImplSuf") : t("code.loopScanSuf");
     loopRow.append(llab, mins, unit);
 
     cardEl.append(head, duty, skillRow, loopRow);
@@ -3115,7 +3123,7 @@ async function validateCodeDir() {
   const seq = ++dirCheckSeq;
   const ok = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
   if (seq !== dirCheckSeq) return;
-  setTest(el, ok ? "ok" : "error", ok ? "✓ 文件夹存在" : "✗ 找不到这个文件夹");
+  setTest(el, ok ? "ok" : "error", ok ? t("code.dirExists") : t("code.dirMissing"));
 }
 
 function renderCode() {
@@ -3134,12 +3142,12 @@ function renderCode() {
 // so review/test agents leave feedback the implementer reads. You watch + type follow-ups.
 async function runCoding() {
   const dir = code.dir.trim();
-  if (!dir) return toast("先填项目文件夹路径");
-  if (!code.task.trim()) return toast("先填任务 / 需求");
+  if (!dir) return toast(t("toast.codeFillDir"));
+  if (!code.task.trim()) return toast(t("toast.codeFillTask"));
   const agents = code.agents.filter((a) => codingProgram(a.worker));
-  if (!agents.length) return toast("至少加 1 个有效的 Agent");
+  if (!agents.length) return toast(t("toast.codeNeedAgent"));
   const dirOk = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
-  if (!dirOk) return toast("项目文件夹不存在：" + dir);
+  if (!dirOk) return toast(tf("toast.codeDirMissing", { dir }));
 
   pushCodeTask(); // snapshot this run's config into 历史任务 before we launch
 
@@ -3232,7 +3240,7 @@ async function runCoding() {
 
   if (code.loop) {
     refreshTermToolbar();
-    toast(`已开启持续协作：各 Agent 空闲后约每 ${code.loopMins || 2.5} 分钟自动巡检/推进一次（顶部「■ 全部停止」或每个标签上的 ■ 可随时停）`, "info");
+    toast(tf("toast.loopStarted", { mins: code.loopMins || 2.5 }), "info");
   }
 }
 
@@ -3273,7 +3281,7 @@ async function pasteClipboardImage(program: string, sid: string) {
       if (!path) return;
       const ref = program === "gemini" ? `@${path} ` : `${path} `;
       await invoke("write_pty", { id: sid, data: ref }).catch(() => {});
-      toast(`已粘贴图片路径：${path.split("/").pop()}`, "info");
+      toast(tf("toast.pastedImagePath", { name: path.split("/").pop() ?? "" }), "info");
       return;
     }
   } catch {
@@ -3313,10 +3321,10 @@ class Term {
     // ⚡技能 button (write_pty into the running CLI), which is the better workflow.
     this.host.innerHTML = `
       <div class="launcher">
-        <div class="launch-row"><label>目录</label><input class="cwd" value="~" /><button class="pick-cwd" type="button">选择</button></div>
-        <div class="launch-row"><label>参数</label><input class="args" placeholder="可选，传给程序的参数" /></div>
+        <div class="launch-row"><label>${escHtml(t("term.cwd"))}</label><input class="cwd" value="~" /><button class="pick-cwd" type="button">${escHtml(t("term.pick"))}</button></div>
+        <div class="launch-row"><label>${escHtml(t("term.args"))}</label><input class="args" placeholder="${escHtml(t("term.argsPh"))}" /></div>
         <div class="launch-btns">
-          <button data-prog="">▶ 终端</button>
+          <button data-prog="">▶ ${escHtml(t("mode.term"))}</button>
           <button data-prog="claude">▶ Claude</button>
           <button data-prog="codex">▶ Codex</button>
           <button data-prog="grok">▶ Grok</button>
@@ -3395,7 +3403,7 @@ class Term {
       }
     };
     this.unlisten = await listen(`pty:exit:${sid}`, () => {
-      term.writeln("\r\n\x1b[90m[进程已退出]\x1b[0m");
+      term.writeln(`\r\n\x1b[90m[${t("term.processExited")}]\x1b[0m`);
       if (this.sessionId === sid) {
         this.sessionId = null;
         this.pane.renderTabs();
@@ -3410,7 +3418,7 @@ class Term {
         this.pane.renderTabs();
         refreshTermToolbar();
       }
-      term.writeln(`\x1b[31m启动失败：${err instanceof Error ? err.message : String(err)}\x1b[0m`);
+      term.writeln(`\x1b[31m${tf("term.launchFailed", { msg: err instanceof Error ? err.message : String(err) })}\x1b[0m`);
       return;
     }
     term.onData((d) => {
@@ -3559,7 +3567,7 @@ class Pane {
   renderTabs() {
     this.tabsEl.innerHTML = "";
     for (const tm of this.tabs) {
-      const label = tm.launched ? tm.title : "新终端";
+      const label = tm.launched ? tm.title : t("term.newTerminal");
       const chip = document.createElement("div");
       chip.className = "tab" + (tm === this.active ? " active" : "");
       chip.innerHTML = `<span class="tab-title">${escHtml(label)}</span>`;
@@ -3569,7 +3577,7 @@ class Pane {
         const tog = document.createElement("button");
         tog.className = "tab-stop" + (looping ? " on" : "");
         tog.textContent = looping ? "■" : "▶";
-        tog.title = looping ? "停止这个 AI（停循环 + 中断当前动作）" : "开启这个 AI（恢复持续协作）";
+        tog.title = looping ? t("term.stopAiTitle") : t("term.startAiTitle");
         tog.addEventListener("click", (e) => {
           e.stopPropagation();
           looping ? stopAgentWork(tm) : startAgentLoop(tm);
@@ -3578,7 +3586,7 @@ class Pane {
       }
       const close = document.createElement("button");
       close.className = "tab-close";
-      close.title = "关闭";
+      close.title = t("tsk.close");
       close.textContent = "✕";
       close.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -3591,7 +3599,7 @@ class Pane {
     const add = document.createElement("button");
     add.className = "tab-add";
     add.textContent = "+";
-    add.title = "新标签页";
+    add.title = t("term.newTab");
     add.addEventListener("click", (e) => {
       e.stopPropagation();
       this.addTab(this.active?.cwd); // new tab inherits the active tab's cwd
@@ -3600,8 +3608,8 @@ class Pane {
     // ⚡ send a skill into the active terminal's running CLI — anytime, mid-conversation.
     const sk = document.createElement("button");
     sk.className = "tab-add";
-    sk.textContent = "⚡技能";
-    sk.title = "发送一个技能给当前终端里的 CLI";
+    sk.textContent = t("term.skillBtn");
+    sk.title = t("term.skillBtnTitle");
     sk.addEventListener("click", (e) => {
       e.stopPropagation();
       openTermSkillPicker(this.active);
@@ -3613,8 +3621,8 @@ class Pane {
       const looping = termHasLoop(act);
       const ctl = document.createElement("button");
       ctl.className = "tab-agent-ctl" + (looping ? " on" : "");
-      ctl.textContent = looping ? "■ 停止此 AI" : "▶ 开启此 AI";
-      ctl.title = looping ? "停止这个 AI（停循环 + 中断它当前的动作）" : "开启这个 AI（恢复持续协作）";
+      ctl.textContent = looping ? t("term.stopThisAi") : t("term.startThisAi");
+      ctl.title = looping ? t("term.stopThisAiTitle") : t("term.startAiTitle");
       ctl.addEventListener("click", (e) => {
         e.stopPropagation();
         looping ? stopAgentWork(act) : startAgentLoop(act);
@@ -3724,9 +3732,9 @@ function refitAllPanes() {
 const termSkillModal = $<HTMLDivElement>("#term-skill-modal");
 let termSkillTarget: Term | null = null;
 let termSkillSearch = "";
-function openTermSkillPicker(t: Term | null) {
-  if (!t || !t.sessionId) return toast("这个终端还没启动 CLI，先点 ▶ 起一个");
-  termSkillTarget = t;
+function openTermSkillPicker(term: Term | null) {
+  if (!term || !term.sessionId) return toast(t("toast.termNoCli"));
+  termSkillTarget = term;
   termSkillSearch = "";
   $<HTMLInputElement>("#term-skill-search").value = "";
   renderTermSkillList();
@@ -3741,7 +3749,7 @@ function renderTermSkillList() {
   if (!items.length) {
     const e = document.createElement("div");
     e.className = "sidebar-note";
-    e.textContent = skills.length ? "没有匹配的技能。" : "技能库为空，去左边「技能」新建。";
+    e.textContent = skills.length ? t("skl.noMatch") : t("term.skillsEmpty");
     listEl.appendChild(e);
     return;
   }
@@ -3753,22 +3761,22 @@ function renderTermSkillList() {
     nm.textContent = s.name;
     const desc = document.createElement("div");
     desc.className = "tsk-desc";
-    desc.textContent = s.description || "（无描述）";
+    desc.textContent = s.description || t("skill.noDesc");
     row.append(nm, desc);
     row.addEventListener("click", async () => {
-      const t = termSkillTarget;
-      if (!t || !t.sessionId) {
+      const term = termSkillTarget;
+      if (!term || !term.sessionId) {
         termSkillModal.classList.add("hidden");
-        return toast("终端已关闭");
+        return toast(t("toast.termClosed"));
       }
       try {
         const body = skillBody(await invoke<string>("read_skill", { name: s.name }));
         const oneLine = body.replace(/\s*\n+\s*/g, " ").trim();
-        if (oneLine) await invoke("write_pty", { id: t.sessionId, data: oneLine + "\r" });
+        if (oneLine) await invoke("write_pty", { id: term.sessionId, data: oneLine + "\r" });
         termSkillModal.classList.add("hidden");
-        toast(`已发送技能「${s.name}」给终端`, "info");
+        toast(tf("toast.skillSent", { name: s.name }), "info");
       } catch (e) {
-        toast("发送失败：" + (e instanceof Error ? e.message : String(e)));
+        toast(tf("toast.sendFailed", { msg: e instanceof Error ? e.message : String(e) }));
       }
     });
     listEl.appendChild(row);
@@ -3812,14 +3820,15 @@ function applyMode() {
     const el = document.createElement("div");
     el.id = "geo-empty-hint";
     el.className = "empty";
-    el.textContent = hint;
+    el.textContent = t(hint);
     resultsEl.appendChild(el);
   }
 }
+// Values are i18n keys, resolved via t() in applyMode so they follow the current language.
 const EMPTY_HINTS: Record<string, string> = {
-  code: "填好项目文件夹、任务、加 ≥1 个本地 CLI Agent，点「运行」→ 切到终端，每个 Agent 各开一个实时终端、并排干活。",
-  geo: "填好左侧表单（标题 / 原文 / 链接 / 路线 任一即可），点「运行」生成结构文 + 小推文。",
-  rt: "填好问题、加 ≥2 个参与模型、选一个主持人，点「运行」开始多模型接力讨论。",
+  code: "empty.code",
+  geo: "empty.geo",
+  rt: "empty.rt",
 };
 
 // ---- wire up ----
@@ -3828,7 +3837,7 @@ $("#toggle-skills").addEventListener("click", () => {
   $("#side-splitter").classList.toggle("hidden", hidden); // splitter follows the sidebar
 });
 $("#add-step").addEventListener("click", () => {
-  steps.push({ title: "新步骤", worker: "", role: "", prompt: "{{prev}}" });
+  steps.push({ title: t("step.newStep"), worker: "", role: "", prompt: "{{prev}}" });
   saveSteps();
   renderSteps();
 });
@@ -3936,7 +3945,7 @@ $<HTMLSelectElement>("#rt-moderator").addEventListener("change", (e) => {
 });
 $("#rt-add").addEventListener("click", () => {
   const opts = chatWorkerOptions();
-  if (!opts.length) return toast("还没有可用模型，先去「模型市场」加一个");
+  if (!opts.length) return toast(t("toast.noModels"));
   // Prefer a worker not already chosen, so each added row is visibly different.
   const used = rt.participants.map((p) => p.worker);
   const unused = opts.find((o) => !used.includes(o.value));
@@ -3948,7 +3957,7 @@ $("#rt-add").addEventListener("click", () => {
   last?.classList.add("just-added");
   last?.scrollIntoView({ block: "nearest" });
   setTimeout(() => last?.classList.remove("just-added"), 1100);
-  toast(`已加入第 ${rt.participants.length} 位参与模型`, "info");
+  toast(tf("toast.rtAdded", { n: rt.participants.length }), "info");
 });
 $("#mode-code").addEventListener("click", () => {
   mode = "code";
@@ -3968,11 +3977,11 @@ $("#mode-term").addEventListener("click", () => {
 $("#term-skill-close").addEventListener("click", () => termSkillModal.classList.add("hidden"));
 $("#stop-all-agents").addEventListener("click", () => {
   stopAllAgentsWork();
-  toast("已停止全部 AI 的持续协作", "info");
+  toast(t("toast.allStopped"), "info");
 });
 $("#start-all-agents").addEventListener("click", () => {
   startAllAgentsWork();
-  toast("已开启全部 AI 的持续协作", "info");
+  toast(t("toast.allStarted"), "info");
 });
 $<HTMLInputElement>("#term-skill-search").addEventListener("input", (e) => {
   termSkillSearch = (e.target as HTMLInputElement).value;
@@ -4002,7 +4011,7 @@ $<HTMLInputElement>("#code-loop").addEventListener("change", (e) => {
   saveCode();
   if (!code.loop) {
     clearCodeLoop(); // turning it off stops any running 持续协作 timers immediately
-    toast("已停止持续协作", "info");
+    toast(t("toast.loopStopped"), "info");
   }
 });
 $<HTMLInputElement>("#code-loop-mins").addEventListener("change", (e) => {
@@ -4014,13 +4023,13 @@ $<HTMLInputElement>("#code-loop-mins").addEventListener("change", (e) => {
   if (!code.loop) {
     code.loop = true;
     $<HTMLInputElement>("#code-loop").checked = true;
-    toast("已自动开启「持续协作」", "info");
+    toast(t("toast.loopAutoOn"), "info");
   }
   saveCode();
 });
 $("#code-add").addEventListener("click", () => {
   const opts = codingAgentOptions();
-  if (!opts.length) return toast("没有可用的编程 CLI");
+  if (!opts.length) return toast(t("toast.noCodingCli"));
   const used = code.agents.map((a) => a.worker);
   const unused = opts.find((o) => !used.includes(o.value));
   code.agents.push({ worker: (unused ?? opts[0]).value, duty: DUTY_SUGGEST[code.agents.length] ?? "", skills: [] });
@@ -4030,7 +4039,7 @@ $("#code-add").addEventListener("click", () => {
   last?.classList.add("just-added");
   last?.scrollIntoView({ block: "nearest" });
   setTimeout(() => last?.classList.remove("just-added"), 1100);
-  toast(`已加入第 ${code.agents.length} 个 Agent`, "info");
+  toast(tf("toast.agentAdded", { n: code.agents.length }), "info");
 });
 function setCodeDir(p: string) {
   code.dir = p;
@@ -4043,7 +4052,7 @@ $("#code-pick").addEventListener("click", async () => {
     const p = await invoke<string | null>("pick_folder");
     if (p) setCodeDir(p);
   } catch (e) {
-    toast("打开文件夹失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.openFolderFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 });
 $("#code-new").addEventListener("click", async () => {
@@ -4051,10 +4060,10 @@ $("#code-new").addEventListener("click", async () => {
     const p = await invoke<string | null>("new_folder");
     if (p) {
       setCodeDir(p);
-      toast("已新建文件夹：" + p, "info");
+      toast(tf("toast.folderCreated", { path: p }), "info");
     }
   } catch (e) {
-    toast("新建文件夹失败：" + (e instanceof Error ? e.message : String(e)));
+    toast(tf("toast.newFolderFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
 });
 
@@ -4126,7 +4135,7 @@ $("#history-copy").addEventListener("click", async () => {
   if (!cur) return;
   try {
     await navigator.clipboard.writeText(cur.md);
-    toast("已复制本条", "info");
+    toast(t("toast.copiedEntry"), "info");
   } catch {
     /* clipboard blocked */
   }
@@ -4151,7 +4160,7 @@ function loadCodeTask(t: CodeTask) {
   localStorage.setItem(LS_MODE, mode);
   applyMode();
   renderCode();
-  toast("已填回：" + t.title, "info");
+  toast(tf("toast.filledBack", { title: t.title }), "info");
 }
 function renderCodeHist() {
   const listEl = $<HTMLDivElement>("#code-hist-list");
@@ -4159,37 +4168,37 @@ function renderCodeHist() {
   if (!codeHist.length) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
-    empty.textContent = "还没有历史任务。在协作编程里点一次「运行」就会自动存一份。";
+    empty.textContent = t("ch.empty");
     listEl.appendChild(empty);
     return;
   }
-  for (const t of codeHist) {
+  for (const task of codeHist) {
     const item = document.createElement("div");
     item.className = "codehist-item";
-    const d = new Date(t.at);
+    const d = new Date(task.at);
     const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     const main = document.createElement("div");
     main.className = "ch-main";
     const title = document.createElement("div");
     title.className = "ch-title";
-    title.textContent = t.title;
+    title.textContent = task.title;
     const meta = document.createElement("div");
     meta.className = "ch-meta";
-    const who = t.agents.map((a) => a.worker).join(" · ") || "无 Agent";
-    meta.textContent = `${when} · ${shortCwd(t.dir) || t.dir || "无目录"} · ${who}`;
+    const who = task.agents.map((a) => a.worker).join(" · ") || t("ch.noAgent");
+    meta.textContent = `${when} · ${shortCwd(task.dir) || task.dir || t("ch.noDir")} · ${who}`;
     main.append(title, meta);
     const del = document.createElement("button");
     del.className = "danger mini ch-del";
     del.textContent = "✕";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
-      codeHist = codeHist.filter((x) => x.id !== t.id);
+      codeHist = codeHist.filter((x) => x.id !== task.id);
       saveCodeHist();
       renderCodeHist();
     });
     item.append(main, del);
     item.addEventListener("click", () => {
-      loadCodeTask(t);
+      loadCodeTask(task);
       codeHistModal.classList.add("hidden");
     });
     listEl.appendChild(item);
@@ -4212,9 +4221,9 @@ codeHistModal.addEventListener("click", (e) => {
 $("#wf-save").addEventListener("click", saveWorkflow);
 // Two-step (not native confirm(), which is unreliable in the webview) to avoid an
 // accidental delete and a silent no-op.
-twoStepDelete($<HTMLButtonElement>("#wf-del"), "删除", "确认删除", () => void deleteWorkflow());
+twoStepDelete($<HTMLButtonElement>("#wf-del"), t("wf.del"), t("wf.delConfirm"), () => void deleteWorkflow());
 $("#wf-new").addEventListener("click", () => {
-  steps = [{ title: "步骤 1", worker: "", role: "", prompt: "{{input}}" }];
+  steps = [{ title: t("step.step1"), worker: "", role: "", prompt: "{{input}}" }];
   inputEl.value = "";
   wfNameEl.value = "";
   localStorage.setItem(LS_INPUT, "");
@@ -4246,19 +4255,19 @@ $("#settings-save").addEventListener("click", () => {
   renderSteps();
 });
 $("#add-provider").addEventListener("click", () => {
-  providers.push({ name: "新厂商", endpoint: "", key: "", models: "" });
+  providers.push({ name: t("settings.newProvider"), endpoint: "", key: "", models: "" });
   renderProviders();
 });
 $("#add-cli").addEventListener("click", () => {
-  clis.push({ name: "新命令", program: "", args: "" });
+  clis.push({ name: t("settings.newCli"), program: "", args: "" });
   renderClis();
 });
 $("#add-video").addEventListener("click", () => {
-  videos.push({ name: "新视频源", endpoint: "", key: "", models: "", resolution: "1080p", ratio: "16:9", duration: "5" });
+  videos.push({ name: t("settings.newVideo"), endpoint: "", key: "", models: "", resolution: "1080p", ratio: "16:9", duration: "5" });
   renderVideos();
 });
 $("#add-image").addEventListener("click", () => {
-  images.push({ name: "新图片源", endpoint: "", key: "", models: "", size: "1024x1024" });
+  images.push({ name: t("settings.newImage"), endpoint: "", key: "", models: "", size: "1024x1024" });
   renderImages();
 });
 
@@ -4278,7 +4287,7 @@ $<HTMLInputElement>("#skl-search").addEventListener("input", (e) => {
   renderSkillsModal();
 });
 $("#skill-save").addEventListener("click", saveSkill);
-resetSkillDel = twoStepDelete($<HTMLButtonElement>("#skill-delete"), "删除", "再点删除", () => {
+resetSkillDel = twoStepDelete($<HTMLButtonElement>("#skill-delete"), t("wf.del"), t("skill.delConfirm"), () => {
   if (editingSkill) {
     skillModal.classList.add("hidden");
     void doDeleteSkill(editingSkill);
