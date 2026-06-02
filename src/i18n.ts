@@ -410,14 +410,14 @@ export const ZH: Record<string, string> = {
   "mode.img": "图像",
   "img.promptLabel": "描述 / 提示词",
   "img.promptPh": "想画什么，越具体越好，比如：一只戴墨镜的柴犬，扁平插画风，柔和配色",
-  "img.sourceLabel": "出图来源（HTTP 出实图 / 终端 CLI 出 SVG）",
+  "img.sourceLabel": "出图来源（🤖 终端 CLI 用自身能力出图、免额外 Key；📷 HTTP 图片模型需 API Key）",
   "img.sourceNone": "选一个出图来源…",
   "img.ratioLabel": "比例",
   "img.countLabel": "数量",
   "img.refLabel": "参考图（可选，放一张就变「图生图」；仅 HTTP 出图支持）",
   "img.refPick": "选图片",
   "img.refClear": "清除参考图",
-  "img.refHint": "文生图：直接写描述出图。图生图：再放一张参考图，在它基础上改。终端 CLI（codex / grok 等）出的是 SVG 矢量图；HTTP 图片源（如火山 Seedream）出真实位图、且支持图生图。",
+  "img.refHint": "🤖 终端 CLI（grok / codex 等）用自身图片能力直接出真实图，不用另配 Key（部分 CLI 如 gemini 没有图片能力，会提示）。📷 HTTP 图片源（火山 Seedream 等）出图需先在「厂商 / 命令 / Key」填 API Key。图生图（放参考图）目前仅 📷 HTTP 源支持。",
   "img.cardTitle": "图像 {i}",
   "img.download": "下载",
   "empty.img": "填描述、选来源、选比例和数量，点运行出图。",
@@ -453,6 +453,9 @@ export const ZH: Record<string, string> = {
   // ---- 图像 mode: 清除 + SVG 来源警告 ----
   "img.clear": "清除",
   "img.svgWarn": "⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「厂商 / 命令 / Key」填 API Key）。",
+
+  // ---- 图像 mode: CLI 出真实图 ----
+  "img.cliNoImage": "这个 CLI 没能出图（可能它没有图片生成能力）。换成 grok / codex，或选 📷 HTTP 图片源。",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must

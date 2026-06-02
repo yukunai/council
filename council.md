@@ -160,3 +160,8 @@
 - 修：`images` 为空且没种过时，自动把火山 Seedream 图片源种进去(空 Key,作模板)，让下拉里始终有一个 📷 真实图源。删了不再回来(council.imgseed 标记)。
 - 图像模式一次性把存着的 CLI 源切到第一个 📷 真实图源(council.drawhttp 标记)，之后手动选 CLI 仍生效。
 - ⚠️ 真实出图仍需在「厂商/命令/Key」给 Seedream(或其它图片模型)填 API Key——这是付费图片模型,CLI 给不了。
+
+### 图像模式：CLI（grok/codex）出真实图——方向纠正（v0.1.10）
+- 之前 CLI 路径要的是 SVG，错了。实测：**grok / codex 自带图片工具，能生成真实 PNG**(各 ~1MB)，用自身 auth、不另需 Key；gemini 这台机器无图片能力(CLI 说没工具 + 图片模型 404)。
+- 新 Rust 命令 `cli_gen_image(program,args,prompt)`：在临时目录跑 CLi(自动批准)生成并保存图片文件，扫最新图片读成 data URL 返回。
+- generateImage 加 `realCli`：图像模式走 cli_gen_image 出真实图；GEO 仍走 SVG(快/矢量)。来源标签 🤖CLI(免Key) / 📷HTTP(需Key)，去掉 SVG 警告与强制切 HTTP。IMG_CLI_INVOKE 存各 CLI 已验证的出图调用。

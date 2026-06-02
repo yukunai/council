@@ -682,6 +682,75 @@ fn dir_exists(path: String) -> bool {
     Path::new(&expanded).is_dir()
 }
 
+// Image-to-file generation via an agentic CLI (grok / codex … have built-in image tools). Runs
+// the CLI in a fresh temp dir with the given args + prompt, waits for it to finish, then returns
+// the newest image file it saved as a base64 data URL. This is how CLIs produce REAL photos
+// (not SVG): they generate + write an image file, and we read it back.
+#[tauri::command]
+fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("council_genimg_{ts}"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(resolve_program(&program));
+    for a in &args {
+        cmd.arg(a);
+    }
+    cmd.arg(&prompt);
+    let out = cmd
+        .current_dir(&dir)
+        .env("PATH", full_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    // Find the newest image file anywhere under the temp dir.
+    let exts = ["png", "jpg", "jpeg", "webp", "gif"];
+    let mut best: Option<(SystemTime, std::path::PathBuf)> = None;
+    let mut stack = vec![dir.clone()];
+    while let Some(d) = stack.pop() {
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                if exts.contains(&ext.as_str()) {
+                    let m = e.metadata().and_then(|md| md.modified()).unwrap_or(UNIX_EPOCH);
+                    if best.as_ref().map(|(t, _)| m >= *t).unwrap_or(true) {
+                        best = Some((m, p));
+                    }
+                }
+            }
+        }
+    }
+    let result = match best {
+        Some((_, p)) => {
+            let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("png").to_lowercase();
+            let mime = match ext.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "webp" => "image/webp",
+                "gif" => "image/gif",
+                _ => "image/png",
+            };
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            Ok(format!("data:{mime};base64,{b64}"))
+        }
+        None => {
+            let tail: String = String::from_utf8_lossy(&out.stderr).chars().rev().take(300).collect::<String>().chars().rev().collect();
+            Err(format!("CLI 没生成出图片文件。{tail}"))
+        }
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 // Save clipboard image bytes (sent from the frontend via navigator.clipboard.read) to a temp
 // PNG and return its path, so CLIs that don't read the clipboard themselves (codex / gemini)
 // can be handed the file path to reference. claude reads the clipboard natively, so it skips this.
@@ -1131,6 +1200,7 @@ pub fn run() {
             resize_pty,
             close_pty,
             dir_exists,
+            cli_gen_image,
             save_clip_image,
             pick_folder,
             new_folder,

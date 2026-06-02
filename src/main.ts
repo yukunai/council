@@ -2210,14 +2210,24 @@ const IMG_RATIOS: { key: string; size: string }[] = [
   { key: "3:4", size: "864x1152" },
 ];
 // Image sources: local CLIs (→ SVG) + HTTP image providers (→ raster). Shared by GEO + 图像.
-// HTTP image models first (📷 real raster photos), then CLIs (✏️ SVG line-art). The emoji + the
-// translated SVG tag make the difference obvious so nobody picks a CLI expecting a photo.
+// Both kinds make REAL images now: 🤖 CLI agents (grok / codex have built-in image tools, use
+// their own auth, no extra key) and 📷 HTTP image models (need an API key). CLIs are listed first
+// since they work out of the box for users who already have those CLIs.
 function imageSourceOptions(): { value: string; label: string }[] {
   const opts: { value: string; label: string }[] = [];
+  for (const c of clis) opts.push({ value: `cli::${c.name}`, label: `🤖 ${c.name}` });
   for (const p of images) for (const m of parseModels(p.models)) opts.push({ value: `img::${p.name}::${m}`, label: `📷 ${p.name} · ${m}` });
-  for (const c of clis) opts.push({ value: `cli::${c.name}`, label: `✏️ ${t("img.svgTag")} · ${c.name}` });
   return opts;
 }
+// Confirmed-working headless image invocations per CLI binary (prompt appended last by the backend).
+// grok & codex generate real images via their own tools; gemini/claude here have no image tool.
+const IMG_CLI_INVOKE: Record<string, string[]> = {
+  grok: ["--always-approve", "-p"],
+  codex: ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+  gemini: ["-y", "--skip-trust", "-p"],
+  claude: ["--dangerously-skip-permissions", "-p"],
+  "cursor-agent": ["--force", "-p"],
+};
 // Image type presets — chips that prepend a Chinese prompt fragment (sent to the model) to shape
 // the result. The chip LABEL is localized via t("imgtype.<key>"); the hint stays Chinese.
 const IMG_TYPES: { key: string; hint: string }[] = [
@@ -2251,12 +2261,26 @@ type ImgResult = { kind: "svg" | "url" | "err"; data: string };
 async function generateImage(
   desc: string,
   worker: string = geo.image,
-  opts: { size?: string; image?: string } = {},
+  opts: { size?: string; image?: string; realCli?: boolean } = {},
 ): Promise<ImgResult> {
   const w = worker;
   if (w.startsWith("cli::")) {
     const name = w.slice(5);
-    if (!clis.some((c) => c.name === name)) return { kind: "err", data: tf("img.cliNotFound", { name }) };
+    const c = clis.find((x) => x.name === name);
+    if (!c) return { kind: "err", data: tf("img.cliNotFound", { name }) };
+    // 图像 mode: let the CLI agent generate + save a REAL image file, then read it back.
+    if (opts.realCli) {
+      const ratio = opts.size ? `，画面比例约 ${opts.size.replace("x", "×")} 像素` : "";
+      const p = `用你自身的图片生成能力/工具，生成一张真实图片（PNG 或 JPG，不要 SVG、不要返回代码或文字描述）：${desc}${ratio}。把生成的图片保存到当前目录下的一个文件里。完成后只输出文件名。`;
+      const inv = IMG_CLI_INVOKE[c.program] ?? parseArgs(c.args);
+      try {
+        const dataUrl = await invoke<string>("cli_gen_image", { program: c.program, args: inv, prompt: p });
+        return dataUrl ? { kind: "url", data: dataUrl } : { kind: "err", data: t("img.cliNoImage") };
+      } catch (e) {
+        return { kind: "err", data: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    // GEO default: lightweight SVG via stdout (fast, vector, for article illustrations).
     const ratio = opts.size ? `，画布比例约 ${opts.size.replace("x", "×")} 像素` : "，宽约 800";
     const prompt = `请画一张图，主题：${desc}${ratio}。\n直接把一段完整 SVG 代码打印到标准输出：以 <svg 开头、以 </svg> 结尾，带 viewBox。画面简洁、有信息量，可含图形与少量文字标注。\n不要创建或修改任何文件、不要运行其他命令、不要任何解释、不要 markdown 代码块围栏，只输出 SVG 本身。`;
     let acc = "";
@@ -2296,17 +2320,13 @@ function renderDraw() {
     draw.worker = "";
     saveDraw();
   }
-  // Default to the first real-photo (📷 HTTP) source. Also a ONE-TIME migrate off a CLI source —
-  // many users landed on codex (SVG) expecting photos; after this one switch, manual CLI picks stick.
-  const firstHttp = opts.find((o) => o.value.startsWith("img::"));
-  if (firstHttp && (!draw.worker || (draw.worker.startsWith("cli::") && !localStorage.getItem("council.drawhttp")))) {
-    draw.worker = firstHttp.value;
+  // Default to the first available source (CLIs come first — grok/codex work without an API key).
+  if (!draw.worker && opts.length) {
+    draw.worker = opts[0].value;
     saveDraw();
   }
-  if (firstHttp) localStorage.setItem("council.drawhttp", "1");
   fillSelect($<HTMLSelectElement>("#img-source"), opts, draw.worker, { none: t("img.sourceNone") });
-  // Warn when the selected source is a CLI (SVG line-art, not a real photo).
-  $("#img-svg-warn").classList.toggle("hidden", !draw.worker.startsWith("cli::"));
+  $("#img-svg-warn").classList.add("hidden"); // CLIs now make real images too — no SVG warning
   // type chips (人像 / 风景 / 商品 / 海报 …) — localized label, Chinese hint shapes the prompt
   const twrap = $<HTMLDivElement>("#img-types");
   twrap.innerHTML = "";
@@ -2439,6 +2459,7 @@ async function runDraw() {
           const res = await generateImage(fullPrompt, draw.worker, {
             size: ratio.size,
             image: isCli ? undefined : drawRef || undefined,
+            realCli: true, // 图像 mode: CLI agents produce real image files, not SVG
           });
           if (my !== genId) return;
           renderImgResultInto(card.body, res);
