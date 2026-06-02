@@ -351,6 +351,13 @@ function catLabel(c: string): string {
 // fields like source/material/image) doesn't blow up on access.
 let geo: GeoState = { ...DEFAULT_GEO, ...load(LS_GEO, {}) };
 let images: ImageProvider[] = load(LS_IMAGES, DEFAULT_IMAGES);
+// Seed the Seedream image model once, so the 图像 mode always has a 📷 real-photo source to pick
+// (the user still fills its API key). One-time: if they later delete it, the flag stops re-seeding.
+if (images.length === 0 && !localStorage.getItem("council.imgseed")) {
+  images = IMAGE_PRESETS.map((p) => ({ ...p }));
+  localStorage.setItem(LS_IMAGES, JSON.stringify(images));
+  localStorage.setItem("council.imgseed", "1");
+}
 // Default to pipeline (the primary workflow). LS_MODE is saved on switch but we deliberately
 // do NOT restore it at cold launch — user always starts on a focused primary view.
 // "term" is still reachable via the segmented button and spawns panes on demand.
@@ -2289,14 +2296,14 @@ function renderDraw() {
     draw.worker = "";
     saveDraw();
   }
-  // Default to the first real-photo (📷 HTTP) source so people don't accidentally land on a CLI.
-  if (!draw.worker) {
-    const firstHttp = opts.find((o) => o.value.startsWith("img::"));
-    if (firstHttp) {
-      draw.worker = firstHttp.value;
-      saveDraw();
-    }
+  // Default to the first real-photo (📷 HTTP) source. Also a ONE-TIME migrate off a CLI source —
+  // many users landed on codex (SVG) expecting photos; after this one switch, manual CLI picks stick.
+  const firstHttp = opts.find((o) => o.value.startsWith("img::"));
+  if (firstHttp && (!draw.worker || (draw.worker.startsWith("cli::") && !localStorage.getItem("council.drawhttp")))) {
+    draw.worker = firstHttp.value;
+    saveDraw();
   }
+  if (firstHttp) localStorage.setItem("council.drawhttp", "1");
   fillSelect($<HTMLSelectElement>("#img-source"), opts, draw.worker, { none: t("img.sourceNone") });
   // Warn when the selected source is a CLI (SVG line-art, not a real photo).
   $("#img-svg-warn").classList.toggle("hidden", !draw.worker.startsWith("cli::"));
