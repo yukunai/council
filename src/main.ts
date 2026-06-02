@@ -1,4 +1,4 @@
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { invoke, Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -2256,6 +2256,33 @@ const IMG_STYLES: { key: string; hint: string }[] = [
 ];
 
 type ImgResult = { kind: "svg" | "url" | "err"; data: string };
+
+async function generateCliImages(
+  desc: string,
+  worker: string,
+  opts: { size?: string } = {},
+  count = 1,
+): Promise<ImgResult[]> {
+  const name = worker.slice(5);
+  const c = clis.find((x) => x.name === name);
+  if (!c) return [{ kind: "err", data: tf("img.cliNotFound", { name }) }];
+  const n = Math.max(1, Math.min(4, Math.floor(count)));
+  const ratio = opts.size ? ` Aspect/size target: ${opts.size}.` : "";
+  const fileRule =
+    n === 1
+      ? "Save exactly one real PNG or JPG in the current directory."
+      : `Save exactly ${n} distinct real PNG or JPG files in the current directory, named council-1.png through council-${n}.png if possible.`;
+  const p = `${fileRule} Do not create SVG, code, markdown, or text-only descriptions.${ratio} Prompt: ${desc}. When finished, output only DONE.`;
+  const inv = IMG_CLI_INVOKE[c.program] ?? parseArgs(c.args);
+  try {
+    const paths = await invoke<string[]>("cli_gen_images", { program: c.program, args: inv, prompt: p, count: n });
+    if (!paths.length) return [{ kind: "err", data: t("img.cliNoImage") }];
+    return paths.slice(0, n).map((path) => ({ kind: "url", data: convertFileSrc(path) }));
+  } catch (e) {
+    return [{ kind: "err", data: e instanceof Error ? e.message : String(e) }];
+  }
+}
+
 // Generate one image for `desc`. Reusable across GEO (default worker = geo.image) and the 图像
 // mode (explicit worker + size/ratio + optional reference image for image-to-image).
 async function generateImage(
@@ -2270,15 +2297,8 @@ async function generateImage(
     if (!c) return { kind: "err", data: tf("img.cliNotFound", { name }) };
     // 图像 mode: let the CLI agent generate + save a REAL image file, then read it back.
     if (opts.realCli) {
-      const ratio = opts.size ? `，画面比例约 ${opts.size.replace("x", "×")} 像素` : "";
-      const p = `用你自身的图片生成能力/工具，生成一张真实图片（PNG 或 JPG，不要 SVG、不要返回代码或文字描述）：${desc}${ratio}。把生成的图片保存到当前目录下的一个文件里。完成后只输出文件名。`;
-      const inv = IMG_CLI_INVOKE[c.program] ?? parseArgs(c.args);
-      try {
-        const dataUrl = await invoke<string>("cli_gen_image", { program: c.program, args: inv, prompt: p });
-        return dataUrl ? { kind: "url", data: dataUrl } : { kind: "err", data: t("img.cliNoImage") };
-      } catch (e) {
-        return { kind: "err", data: e instanceof Error ? e.message : String(e) };
-      }
+      const [res] = await generateCliImages(desc, w, { size: opts.size }, 1);
+      return res ?? { kind: "err", data: t("img.cliNoImage") };
     }
     // GEO default: lightweight SVG via stdout (fast, vector, for article illustrations).
     const ratio = opts.size ? `，画布比例约 ${opts.size.replace("x", "×")} 像素` : "，宽约 800";
@@ -2452,6 +2472,16 @@ async function runDraw() {
       c.setStatus("running", t("img.generating"));
       return c;
     });
+    if (isCli) {
+      const res = await generateCliImages(fullPrompt, draw.worker, { size: ratio.size }, n);
+      if (my !== genId) return;
+      cards.forEach((card, i) => {
+        const r = res[i] ?? { kind: "err", data: t("img.cliNoImage") };
+        renderImgResultInto(card.body, r);
+        card.setStatus(r.kind === "err" ? "error" : "done", r.kind === "err" ? t("status.error") : t("status.done"));
+      });
+      return;
+    }
     await Promise.all(
       cards.map(async (card, i) => {
         if (my !== genId) return;

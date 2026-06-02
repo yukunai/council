@@ -684,14 +684,45 @@ fn dir_exists(path: String) -> bool {
 
 // Image-to-file generation via an agentic CLI (grok / codex … have built-in image tools). Runs
 // the CLI in a fresh temp dir with the given args + prompt, waits for it to finish, then returns
-// the newest image file it saved as a base64 data URL. This is how CLIs produce REAL photos
-// (not SVG): they generate + write an image file, and we read it back.
+// the image file paths it saved. The frontend converts those paths with convertFileSrc, avoiding
+// slow base64 encoding and large IPC payloads for multi-image runs.
 #[tauri::command]
-fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<String, String> {
+fn cli_gen_images(
+    program: String,
+    args: Vec<String>,
+    prompt: String,
+    count: Option<u32>,
+) -> Result<Vec<String>, String> {
     use std::process::{Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("council_genimg_{ts}"));
+    let want = count.unwrap_or(1).clamp(1, 4) as usize;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir();
+    if let Ok(rd) = std::fs::read_dir(&tmp) {
+        let cutoff = SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(24 * 60 * 60))
+            .unwrap_or(UNIX_EPOCH);
+        for e in rd.flatten() {
+            let p = e.path();
+            let Some(name) = p.file_name().and_then(|x| x.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("council_genimg_") || !p.is_dir() {
+                continue;
+            }
+            let modified = e
+                .metadata()
+                .and_then(|md| md.modified())
+                .unwrap_or(UNIX_EPOCH);
+            if modified < cutoff {
+                let _ = std::fs::remove_dir_all(p);
+            }
+        }
+    }
+    let dir = tmp.join(format!("council_genimg_{ts}"));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(resolve_program(&program));
     for a in &args {
@@ -700,7 +731,11 @@ fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<S
     // Guard against argv flag-smuggling: a prompt starting with '-' could be parsed as a CLI flag.
     // Prepending a space keeps it a plain positional/value (harmless leading space in an image
     // description) without changing the per-CLI invocation structure.
-    let safe_prompt = if prompt.starts_with('-') { format!(" {prompt}") } else { prompt };
+    let safe_prompt = if prompt.starts_with('-') {
+        format!(" {prompt}")
+    } else {
+        prompt
+    };
     cmd.arg(&safe_prompt);
     let out = cmd
         .current_dir(&dir)
@@ -712,7 +747,7 @@ fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<S
         .map_err(|e| e.to_string())?;
     // Find the newest image file anywhere under the temp dir.
     let exts = ["png", "jpg", "jpeg", "webp", "gif"];
-    let mut best: Option<(SystemTime, std::path::PathBuf)> = None;
+    let mut found: Vec<(SystemTime, std::path::PathBuf)> = Vec::new();
     let mut stack = vec![dir.clone()];
     while let Some(d) = stack.pop() {
         if let Ok(rd) = std::fs::read_dir(&d) {
@@ -722,37 +757,52 @@ fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<S
                     stack.push(p);
                     continue;
                 }
-                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                let ext = p
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if exts.contains(&ext.as_str()) {
-                    let m = e.metadata().and_then(|md| md.modified()).unwrap_or(UNIX_EPOCH);
-                    if best.as_ref().map(|(t, _)| m >= *t).unwrap_or(true) {
-                        best = Some((m, p));
-                    }
+                    let m = e
+                        .metadata()
+                        .and_then(|md| md.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    found.push((m, p));
                 }
             }
         }
     }
-    let result = match best {
-        Some((_, p)) => {
-            let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
-            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("png").to_lowercase();
-            let mime = match ext.as_str() {
-                "jpg" | "jpeg" => "image/jpeg",
-                "webp" => "image/webp",
-                "gif" => "image/gif",
-                _ => "image/png",
-            };
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            Ok(format!("data:{mime};base64,{b64}"))
-        }
-        None => {
-            let tail: String = String::from_utf8_lossy(&out.stderr).chars().rev().take(300).collect::<String>().chars().rev().collect();
-            Err(format!("CLI 没生成出图片文件。{tail}"))
-        }
-    };
-    let _ = std::fs::remove_dir_all(&dir);
-    result
+    found.sort_by(|a, b| {
+        let name_a = a.1.file_name().and_then(|x| x.to_str()).unwrap_or("");
+        let name_b = b.1.file_name().and_then(|x| x.to_str()).unwrap_or("");
+        name_a.cmp(name_b).then_with(|| a.0.cmp(&b.0))
+    });
+    let mut paths = Vec::new();
+    for (_, p) in found.into_iter().take(want) {
+        paths.push(p.to_string_lossy().to_string());
+    }
+    if paths.is_empty() {
+        let tail: String = String::from_utf8_lossy(&out.stderr)
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(format!("CLI 没生成出图片文件。{tail}"));
+    } else {
+        Ok(paths)
+    }
+}
+
+#[tauri::command]
+fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<String, String> {
+    cli_gen_images(program, args, prompt, Some(1)).and_then(|mut urls| {
+        urls.pop()
+            .ok_or_else(|| "CLI 没生成出图片文件。".to_string())
+    })
 }
 
 // Save clipboard image bytes (sent from the frontend via navigator.clipboard.read) to a temp
@@ -1204,6 +1254,7 @@ pub fn run() {
             resize_pty,
             close_pty,
             dir_exists,
+            cli_gen_images,
             cli_gen_image,
             save_clip_image,
             pick_folder,
