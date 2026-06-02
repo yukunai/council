@@ -1881,8 +1881,9 @@ function renderGeoStyles() {
   for (const s of GEO_STYLES) {
     const b = document.createElement("button");
     b.className = "geo-style-btn" + (s.key === geo.style ? " active" : "");
-    b.textContent = s.label;
-    b.title = s.hint;
+    // Display the localized name/hint; s.label/s.hint stay Chinese for the model brief (buildGeoBrief).
+    b.textContent = t("geostyle." + s.key);
+    b.title = t("geostyle." + s.key + ".hint");
     b.addEventListener("click", () => {
       geo.style = s.key;
       saveGeo();
@@ -4314,11 +4315,17 @@ syncDirInput.addEventListener("change", async () => {
 });
 
 // ---- i18n: fill the language picker, apply the current language, re-apply on change ----
+// Apply the current language everywhere: static data-i18n elements AND all JS-built dynamic
+// content (step cards, selects, style chips, lists, the active editor) — the latter is the part
+// that only updates when re-rendered, so switching language must re-run those renders.
 function applyLang() {
   applyI18n();
-  // Dynamic labels carry an interpolated count, so they're rendered here rather than via data-i18n.
   $("#geo-len-label").textContent = tf("geo.lenLabel", { n: geo.length });
   $("#rt-rounds-label").textContent = tf("rt.roundsLabel", { n: rt.rounds });
+  renderSteps();
+  void refreshWorkflowList();
+  void refreshSkills();
+  applyMode(); // re-renders the active editor (geo styles, rt participants, code agents…)
 }
 const langSel = $<HTMLSelectElement>("#lang-select");
 for (const l of LANGS) {
@@ -4333,8 +4340,3 @@ langSel.addEventListener("change", () => {
   applyLang();
 });
 applyLang();
-
-renderSteps();
-refreshWorkflowList();
-refreshSkills();
-applyMode();

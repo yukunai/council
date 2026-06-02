@@ -383,6 +383,28 @@ export const ZH: Record<string, string> = {
   "settings.newCli": "新命令",
   "settings.newVideo": "新视频源",
   "settings.newImage": "新图片源",
+
+  // ---- GEO style display names (s.label/s.hint stay zh for the model brief) ----
+  "geostyle.geo": "GEO 结构文",
+  "geostyle.geo.hint": "中性客观、信息密度高、便于被 AI 搜索引擎摘录引用",
+  "geostyle.xhs": "小红书风",
+  "geostyle.xhs.hint": "口语、有钩子标题、分点、适度 emoji",
+  "geostyle.travel": "专业游记",
+  "geostyle.travel.hint": "细节丰富、叙事流畅、带实用攻略",
+  "geostyle.history": "历史科普",
+  "geostyle.history.hint": "严谨、引经据典、讲清来龙去脉",
+  "geostyle.essay": "散文叙事",
+  "geostyle.essay.hint": "文学性、画面感、第一人称",
+  "geostyle.ai": "AI / 科技",
+  "geostyle.ai.hint": "讲清原理与应用、术语准确、面向从业者",
+  "geostyle.business": "商业金融",
+  "geostyle.business.hint": "结构清晰、有数据与案例、决策导向",
+  "geostyle.finance": "财经",
+  "geostyle.finance.hint": "宏观视角、行情与政策解读、谨慎严谨",
+  "geostyle.medical": "医疗保险",
+  "geostyle.medical.hint": "权威循证、风险提示、不夸大疗效、合规",
+  "geostyle.tweet": "推文 / 短帖",
+  "geostyle.tweet.hint": "短平快、钩子开场、口语、信息浓缩、适合社媒分发",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must

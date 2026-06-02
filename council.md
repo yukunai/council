@@ -136,3 +136,9 @@
 - main.ts 里 ~228 处用户可见动态字符串（toast 提示、状态运行中/完成/出错/排队中、动态卡片标题、按钮、占位符等）改用 t()/tf()，新增 203 个词条（共 340 词条 × 14 语言）。
 - **保持中文不翻**：发给模型/CLI 的提示词（协作编程系统提示·nudge·notes、圆桌讨论与综述 prompt、TEAM_NOTES 文本、GEO brief、markdown 导出）、分类状态哨兵值（全部/未分类，仅显示用 catLabel 翻译）、品牌预设名。
 - 并行翻译（每语言一个 agent）+ 严格校验：键齐全 + 插值占位符({n}/{msg}/{name})逐键比对无错。修了几处 t 被局部变量遮蔽（CodeTask/Date/Term 命名 t）。
+
+### i18n 修复：切换语言不重渲染动态内容 + GEO 风格本地化（v0.1.5）
+- bug：切语言只更新静态 data-i18n 元素，JS 动态生成的内容（步骤卡的「技能」标签、「载入已存」下拉、GEO 风格 chips、列表、活动编辑器）仍是建立时的语言。
+- 修：applyLang() 现在切语言时重渲染全部动态内容（renderSteps + refreshWorkflowList + refreshSkills + applyMode），不只 applyI18n。
+- GEO 风格 chips：之前直接用 s.label（中文，因要喂模型 brief）。新增 geostyle.<key>/.hint 共 20 词条，chip 显示走 t()，s.label/s.hint 仍保留中文供 buildGeoBrief。共 360 词条 × 14 语言。
+- 注：默认示例流水线的步骤内容（写脚本/角色/prompt）是已存进 localStorage 的用户数据，非 UI，不随语言变（可手动编辑）。
