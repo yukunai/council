@@ -2298,6 +2298,8 @@ function renderDraw() {
     }
   }
   fillSelect($<HTMLSelectElement>("#img-source"), opts, draw.worker, { none: t("img.sourceNone") });
+  // Warn when the selected source is a CLI (SVG line-art, not a real photo).
+  $("#img-svg-warn").classList.toggle("hidden", !draw.worker.startsWith("cli::"));
   // type chips (人像 / 风景 / 商品 / 海报 …) — localized label, Chinese hint shapes the prompt
   const twrap = $<HTMLDivElement>("#img-types");
   twrap.innerHTML = "";
@@ -4183,6 +4185,11 @@ $("#mode-img").addEventListener("click", () => {
 // 图像 form fields
 $<HTMLTextAreaElement>("#img-prompt").addEventListener("input", (e) => {
   draw.prompt = (e.target as HTMLTextAreaElement).value;
+  saveDraw();
+});
+$("#img-clear").addEventListener("click", () => {
+  draw.prompt = "";
+  $<HTMLTextAreaElement>("#img-prompt").value = "";
   saveDraw();
 });
 $<HTMLSelectElement>("#img-source").addEventListener("change", (e) => {

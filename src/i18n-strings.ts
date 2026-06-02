@@ -402,6 +402,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Flat Illustration",
     "imgstyle.pixel": "Pixel Art",
     "imgstyle.ink": "Ink Wash",
+    "img.clear": "Clear",
+    "img.svgWarn": "⚠️ This source is a terminal CLI that only produces SVG line-art, not real photos. For real photos, pick a 📷 source (an image model that needs an API Key set in Providers / Commands / Keys).",
   },
   es: {
     "tagline": "Flujos de trabajo multimodelo",
@@ -804,6 +806,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Ilustración plana",
     "imgstyle.pixel": "Pixel art",
     "imgstyle.ink": "Tinta china",
+    "img.clear": "Borrar",
+    "img.svgWarn": "⚠️ Esta fuente es una CLI de terminal que solo genera dibujos de líneas en SVG, no fotos reales. Para fotos reales, elige una fuente 📷 (un modelo de imagen que necesita una API Key configurada en Proveedores / Comandos / Claves).",
   },
   pt: {
     "tagline": "Fluxo de trabalho multimodelo",
@@ -1206,6 +1210,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Ilustração flat",
     "imgstyle.pixel": "Pixel art",
     "imgstyle.ink": "Tinta chinesa",
+    "img.clear": "Limpar",
+    "img.svgWarn": "⚠️ Esta fonte é uma CLI de terminal que só gera desenhos de linhas em SVG, não fotos reais. Para fotos reais, escolha uma fonte 📷 (um modelo de imagem que precisa de uma API Key configurada em Provedores / Comandos / Chaves).",
   },
   fr: {
     "tagline": "Flux de travail multi-modèles",
@@ -1608,6 +1614,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Illustration plate",
     "imgstyle.pixel": "Pixel art",
     "imgstyle.ink": "Encre traditionnelle",
+    "img.clear": "Effacer",
+    "img.svgWarn": "⚠️ Cette source est une CLI de terminal qui ne produit que des dessins au trait SVG, pas de vraies photos. Pour de vraies photos, choisissez une source 📷 (un modèle d'image qui nécessite une API Key configurée dans Fournisseurs / Commandes / Clés).",
   },
   de: {
     "tagline": "Multi-Modell-Workflows",
@@ -2010,6 +2018,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Flache Illustration",
     "imgstyle.pixel": "Pixel-Art",
     "imgstyle.ink": "Tuschemalerei",
+    "img.clear": "Löschen",
+    "img.svgWarn": "⚠️ Diese Quelle ist eine Terminal-CLI, die nur SVG-Strichzeichnungen erzeugt, keine echten Fotos. Für echte Fotos wähle eine 📷-Quelle (ein Bildmodell, das einen API Key benötigt, der unter Anbieter / Befehle / Schlüssel hinterlegt wird).",
   },
   ja: {
     "tagline": "マルチモデルワークフロー",
@@ -2412,6 +2422,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "フラットイラスト",
     "imgstyle.pixel": "ピクセルアート",
     "imgstyle.ink": "水墨画",
+    "img.clear": "クリア",
+    "img.svgWarn": "⚠️ このソースはターミナル CLI で、SVG の線画しか生成できず、実際の写真ではありません。実写が必要な場合は 📷 のソース（画像モデル）を選んでください。「プロバイダー / コマンド / キー」で API Key の設定が必要です。",
   },
   ko: {
     "tagline": "멀티모델 워크플로",
@@ -2814,6 +2826,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "플랫 일러스트",
     "imgstyle.pixel": "픽셀 아트",
     "imgstyle.ink": "수묵화",
+    "img.clear": "지우기",
+    "img.svgWarn": "⚠️ 이 소스는 터미널 CLI로, SVG 선화만 생성하며 실제 사진이 아닙니다. 실제 사진을 원하면 📷 소스(이미지 모델)를 선택하세요. 「공급자 / 명령 / 키」에서 API Key를 먼저 입력해야 합니다.",
   },
   vi: {
     "tagline": "Quy trình đa mô hình",
@@ -3216,6 +3230,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Minh họa phẳng",
     "imgstyle.pixel": "Pixel",
     "imgstyle.ink": "Thủy mặc",
+    "img.clear": "Xóa",
+    "img.svgWarn": "⚠️ Nguồn này là một CLI dòng lệnh chỉ tạo ra hình vẽ nét SVG, không phải ảnh thật. Để có ảnh thật, hãy chọn nguồn 📷 (một mô hình hình ảnh cần API Key được thiết lập trong Nhà cung cấp / Lệnh / Khóa).",
   },
   id: {
     "tagline": "Alur kerja multi-model",
@@ -3618,6 +3634,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Ilustrasi Datar",
     "imgstyle.pixel": "Gaya Piksel",
     "imgstyle.ink": "Tinta Oriental",
+    "img.clear": "Hapus",
+    "img.svgWarn": "⚠️ Sumber ini adalah CLI terminal yang hanya menghasilkan gambar garis SVG, bukan foto asli. Untuk foto asli, pilih sumber 📷 (model gambar yang memerlukan API Key yang diatur di Penyedia / Perintah / Kunci).",
   },
   hi: {
     "tagline": "मल्टी-मॉडल वर्कफ़्लो",
@@ -4020,6 +4038,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "फ़्लैट चित्रण",
     "imgstyle.pixel": "पिक्सेल आर्ट",
     "imgstyle.ink": "स्याही चित्र",
+    "img.clear": "साफ़ करें",
+    "img.svgWarn": "⚠️ यह स्रोत एक terminal CLI है जो केवल SVG लाइन-आर्ट बनाता है, असली फ़ोटो नहीं। असली फ़ोटो के लिए 📷 वाला स्रोत चुनें (एक image model जिसके लिए Providers / Commands / Keys में API Key सेट करना ज़रूरी है)।",
   },
   th: {
     "tagline": "เวิร์กโฟลว์หลายโมเดล",
@@ -4422,6 +4442,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "ภาพแบบแบน",
     "imgstyle.pixel": "พิกเซล",
     "imgstyle.ink": "ภาพหมึกจีน",
+    "img.clear": "ล้าง",
+    "img.svgWarn": "⚠️ แหล่งนี้เป็น terminal CLI ที่สร้างได้เฉพาะภาพลายเส้น SVG ไม่ใช่ภาพถ่ายจริง หากต้องการภาพถ่ายจริง ให้เลือกแหล่งที่ขึ้นต้นด้วย 📷 (image model ที่ต้องตั้งค่า API Key ในเมนู Providers / Commands / Keys)",
   },
   tr: {
     "tagline": "Çok modelli iş akışı",
@@ -4824,6 +4846,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "Düz illüstrasyon",
     "imgstyle.pixel": "Piksel",
     "imgstyle.ink": "Çin mürekkep",
+    "img.clear": "Temizle",
+    "img.svgWarn": "⚠️ Bu kaynak yalnızca SVG çizgi resmi üreten bir terminal CLI'ıdır, gerçek fotoğraf değil. Gerçek fotoğraflar için 📷 ile başlayan bir kaynak seçin (Sağlayıcılar / Komutlar / Anahtarlar bölümünde API Key girilmesi gereken bir görüntü modeli).",
   },
   ar: {
     "tagline": "سير عمل متعدد النماذج",
@@ -5226,5 +5250,7 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "imgstyle.flat": "رسم مسطّح",
     "imgstyle.pixel": "فن البكسل",
     "imgstyle.ink": "حبر صيني",
+    "img.clear": "مسح",
+    "img.svgWarn": "⚠️ هذا المصدر هو واجهة سطر أوامر طرفية (CLI) تنتج رسومات خطية بصيغة SVG فقط وليست صورًا حقيقية. للحصول على صور حقيقية اختر مصدرًا يبدأ بـ 📷 (وهو نموذج صور يتطلب إدخال API Key في «المزوّدون / الأوامر / المفاتيح»).",
   },
 };

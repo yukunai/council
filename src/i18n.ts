@@ -449,6 +449,10 @@ export const ZH: Record<string, string> = {
   "imgstyle.flat": "扁平插画",
   "imgstyle.pixel": "像素风",
   "imgstyle.ink": "国风水墨",
+
+  // ---- 图像 mode: 清除 + SVG 来源警告 ----
+  "img.clear": "清除",
+  "img.svgWarn": "⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「厂商 / 命令 / Key」填 API Key）。",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must

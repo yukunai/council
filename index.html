@@ -200,11 +200,15 @@
         </section>
 
         <section id="img-editor" class="editor hidden">
-          <label class="field-label" for="img-prompt" data-i18n="img.promptLabel">描述 / 提示词</label>
+          <div class="geo-sub-head">
+            <label class="field-label" for="img-prompt" style="margin: 0" data-i18n="img.promptLabel">描述 / 提示词</label>
+            <button id="img-clear" class="mini" type="button" data-i18n="img.clear">清除</button>
+          </div>
           <textarea id="img-prompt" class="input-box" rows="3" data-i18n-ph="img.promptPh" placeholder="想画什么，越具体越好，比如：一只戴墨镜的柴犬，扁平插画风，柔和配色"></textarea>
 
           <label class="field-label" style="margin-top: 12px" data-i18n="img.sourceLabel">出图来源（HTTP 出实图 / 终端 CLI 出 SVG）</label>
           <select id="img-source"></select>
+          <div id="img-svg-warn" class="ref-hint hidden" data-i18n="img.svgWarn">⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「厂商 / 命令 / Key」填 API Key）。</div>
 
           <label class="field-label" style="margin-top: 12px" data-i18n="img.typeLabel">类型</label>
           <div id="img-types" class="geo-styles"></div>
