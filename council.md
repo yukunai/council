@@ -148,3 +148,9 @@
 - **出图来源**复用 GEO 那套：HTTP 图片源(火山 Seedream 等→真实位图，支持图生图) + 终端 CLI(codex/grok 等→SVG 矢量图)。抽出 imageSourceOptions()/参数化 generateImage() 复用。
 - **图生图**：后端 image_generate 加可选 image 参数——OpenAI 端点走 multipart /images/edits，其它(Seedream)在 body 带 image 字段。Cargo 加 reqwest multipart + base64。
 - **数量**：前端并发调 N 次(provider 无关)；**比例**映射成 size 像素传后端，CLI 出 SVG 时写进画布提示。新增 17 i18n 词条×14 语言(共 377)。
+
+### 图像模式增强：真实图引导 + 类型/风格预设 + 挂技能（v0.1.7）
+- 澄清「真实照片 vs SVG」：来源里 HTTP 图片源标 📷（真实位图 PNG），CLI 标 ✏️ SVG 线条图；默认选第一个 HTTP 真实图源，免得误选 CLI 出线条图。
+- **类型预设**(人像/风景/商品/海报/插画/Logo/表情包) + **风格预设**(写实/动漫/吉卜力/赛博朋克/水彩/油画/3D/扁平/像素/国风)：chip 选中后把对应中文提示片段拼进 prompt 塑形(标签按 14 语言本地化，提示词保持中文喂模型)。
+- **可挂技能**：图像模式加技能下拉，技能正文叠加到提示词。最终 prompt = 技能正文 + 类型 + 风格 + 描述。
+- 真实图片本就靠 HTTP 文生图模型(火山 Seedream 等，需 API Key)；能生成什么取决于所选模型，prompt 驱动可出人像/风景/商品/海报/插画等。新增 23 词条×14 语言(共 400)。

@@ -424,6 +424,31 @@ export const ZH: Record<string, string> = {
   "toast.fillImgPrompt": "先填图像描述",
   "toast.pickImgSource": "先选一个出图来源",
   "toast.cliNoI2i": "终端 CLI 出图不支持参考图，已忽略参考图",
+
+  // ---- 图像 mode: 类型 / 风格 / 技能 预设 ----
+  "img.svgTag": "SVG 线条图",
+  "img.typeLabel": "类型",
+  "img.styleLabel": "风格",
+  "img.skillLabel": "技能（可选，叠加到提示词）",
+  "imgtype.none": "自由",
+  "imgtype.portrait": "人像",
+  "imgtype.landscape": "风景",
+  "imgtype.product": "商品",
+  "imgtype.poster": "海报",
+  "imgtype.illustration": "插画",
+  "imgtype.logo": "Logo / 图标",
+  "imgtype.sticker": "表情包",
+  "imgstyle.none": "自由",
+  "imgstyle.real": "写实照片",
+  "imgstyle.anime": "动漫",
+  "imgstyle.ghibli": "吉卜力",
+  "imgstyle.cyberpunk": "赛博朋克",
+  "imgstyle.watercolor": "水彩",
+  "imgstyle.oil": "油画",
+  "imgstyle.render3d": "3D 渲染",
+  "imgstyle.flat": "扁平插画",
+  "imgstyle.pixel": "像素风",
+  "imgstyle.ink": "国风水墨",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must
