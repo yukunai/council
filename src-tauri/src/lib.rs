@@ -697,7 +697,11 @@ fn cli_gen_image(program: String, args: Vec<String>, prompt: String) -> Result<S
     for a in &args {
         cmd.arg(a);
     }
-    cmd.arg(&prompt);
+    // Guard against argv flag-smuggling: a prompt starting with '-' could be parsed as a CLI flag.
+    // Prepending a space keeps it a plain positional/value (harmless leading space in an image
+    // description) without changing the per-CLI invocation structure.
+    let safe_prompt = if prompt.starts_with('-') { format!(" {prompt}") } else { prompt };
+    cmd.arg(&safe_prompt);
     let out = cmd
         .current_dir(&dir)
         .env("PATH", full_path())
