@@ -7,7 +7,7 @@
 **A lightweight multi-model workflow desktop app.**
 Chain different LLMs into a pipeline where each step does one job — the output of one step feeds the next.
 
-[简体中文](./README.zh.md) · English
+[简体中文](./README.zh.md) · English · [Español](./README.es.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [Deutsch](./README.de.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Tiếng Việt](./README.vi.md) · [Bahasa Indonesia](./README.id.md) · [हिन्दी](./README.hi.md) · [ไทย](./README.th.md) · [Türkçe](./README.tr.md) · [العربية](./README.ar.md)
 
 Tauri 2 · vanilla TypeScript · no frontend framework
 

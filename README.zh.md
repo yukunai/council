@@ -7,7 +7,7 @@
 **轻量多模型工作流桌面应用。**
 把不同的大模型串成一条流水线，每一步交给一个模型干一件事，上一步的产出喂给下一步。
 
-简体中文 · [English](./README.md)
+简体中文 · [English](./README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [Deutsch](./README.de.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Tiếng Việt](./README.vi.md) · [Bahasa Indonesia](./README.id.md) · [हिन्दी](./README.hi.md) · [ไทย](./README.th.md) · [Türkçe](./README.tr.md) · [العربية](./README.ar.md)
 
 Tauri 2 · vanilla TypeScript · 无前端框架
 
