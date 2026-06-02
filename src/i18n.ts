@@ -405,6 +405,25 @@ export const ZH: Record<string, string> = {
   "geostyle.medical.hint": "权威循证、风险提示、不夸大疗效、合规",
   "geostyle.tweet": "推文 / 短帖",
   "geostyle.tweet.hint": "短平快、钩子开场、口语、信息浓缩、适合社媒分发",
+
+  // ---- 图像 mode (text-to-image / image-to-image) ----
+  "mode.img": "图像",
+  "img.promptLabel": "描述 / 提示词",
+  "img.promptPh": "想画什么，越具体越好，比如：一只戴墨镜的柴犬，扁平插画风，柔和配色",
+  "img.sourceLabel": "出图来源（HTTP 出实图 / 终端 CLI 出 SVG）",
+  "img.sourceNone": "选一个出图来源…",
+  "img.ratioLabel": "比例",
+  "img.countLabel": "数量",
+  "img.refLabel": "参考图（可选，放一张就变「图生图」；仅 HTTP 出图支持）",
+  "img.refPick": "选图片",
+  "img.refClear": "清除参考图",
+  "img.refHint": "文生图：直接写描述出图。图生图：再放一张参考图，在它基础上改。终端 CLI（codex / grok 等）出的是 SVG 矢量图；HTTP 图片源（如火山 Seedream）出真实位图、且支持图生图。",
+  "img.cardTitle": "图像 {i}",
+  "img.download": "下载",
+  "empty.img": "填描述、选来源、选比例和数量，点运行出图。",
+  "toast.fillImgPrompt": "先填图像描述",
+  "toast.pickImgSource": "先选一个出图来源",
+  "toast.cliNoI2i": "终端 CLI 出图不支持参考图，已忽略参考图",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must

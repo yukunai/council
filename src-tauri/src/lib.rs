@@ -199,7 +199,34 @@ async fn fetch_url(url: String) -> Result<String, String> {
 }
 
 // Text-to-image (Volcengine Ark / Seedream shape, OpenAI-images compatible). Synchronous:
-// POST prompt, get back an image URL (or base64). No polling, unlike video.
+// Decode a reference image (a `data:image/...;base64,...` URL or an http(s) URL) into raw bytes
+// + its MIME type — used by image-to-image (multipart upload to OpenAI's /images/edits).
+async fn load_image_bytes(src: &str, client: &reqwest::Client) -> Result<(Vec<u8>, String), String> {
+    if let Some(rest) = src.strip_prefix("data:") {
+        let (meta, data) = rest.split_once(',').ok_or("bad data URL")?;
+        let mime = meta.split(';').next().unwrap_or("image/png").to_string();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.trim())
+            .map_err(|e| e.to_string())?;
+        Ok((bytes, mime))
+    } else {
+        let r = client.get(src).send().await.map_err(|e| e.to_string())?;
+        let mime = r
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/png")
+            .to_string();
+        let bytes = r.bytes().await.map_err(|e| e.to_string())?.to_vec();
+        Ok((bytes, mime))
+    }
+}
+
+// POST a prompt, get back one image URL (or base64). No polling, unlike video.
+// `image` (optional) turns this into image-to-image: for OpenAI endpoints it switches to the
+// multipart /images/edits API; for everything else (Volcengine Seedream et al.) it adds an
+// `image` field to the JSON body. Callers asking for multiple images just call this N times.
 #[tauri::command]
 async fn image_generate(
     endpoint: String,
@@ -207,29 +234,63 @@ async fn image_generate(
     model: String,
     prompt: String,
     size: String,
+    image: Option<String>,
 ) -> Result<String, String> {
-    let mut body = serde_json::json!({
-        "model": model,
-        "prompt": prompt,
-        "response_format": "url",
-        "watermark": false,
-    });
-    if !size.trim().is_empty() {
-        body["size"] = serde_json::json!(size);
-    }
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let ref_img = image.unwrap_or_default();
+    let is_i2i = !ref_img.trim().is_empty();
+    let is_openai = endpoint.contains("openai.com") || endpoint.contains("/images/edits");
+
+    let resp = if is_i2i && is_openai {
+        // OpenAI image-to-image: multipart upload to /images/edits.
+        let edits_url = endpoint.replace("/images/generations", "/images/edits");
+        let (bytes, mime) = load_image_bytes(&ref_img, &client).await?;
+        let ext = mime.rsplit('/').next().unwrap_or("png");
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(format!("image.{ext}"))
+            .mime_str(&mime)
+            .map_err(|e| e.to_string())?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", model)
+            .text("prompt", prompt)
+            .part("image", part);
+        if !size.trim().is_empty() {
+            form = form.text("size", size);
+        }
+        client
+            .post(&edits_url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .multipart(form)
+            .send()
+            .await
+    } else {
+        // text-to-image, or Seedream-style image-to-image (reference image in the JSON body).
+        let mut body = serde_json::json!({
+            "model": model,
+            "prompt": prompt,
+            "response_format": "url",
+            "watermark": false,
+        });
+        if !size.trim().is_empty() {
+            body["size"] = serde_json::json!(size);
+        }
+        if is_i2i {
+            body["image"] = serde_json::json!(ref_img);
+        }
+        client
+            .post(&endpoint)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+    }
+    .map_err(|e| e.to_string())?;
+
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {

@@ -31,6 +31,7 @@
           <button id="mode-rt" class="seg-btn" data-i18n="mode.rt">圆桌</button>
           <button id="mode-code" class="seg-btn" data-i18n="mode.code">协作编程</button>
           <button id="mode-term" class="seg-btn" data-i18n="mode.term">终端</button>
+          <button id="mode-img" class="seg-btn" data-i18n="mode.img">图像</button>
         </span>
         <button id="toggle-skills" data-i18n="nav.skills">技能</button>
         <button id="add-step" data-i18n="nav.addStep">＋ 步骤</button>
@@ -195,6 +196,32 @@
             队友通过项目根的 <code>TEAM_NOTES.md</code> 互通反馈。勾了「自动批准」就无人值守
             （Claude <code>--dangerously-skip-permissions</code>、Codex <code>--dangerously-bypass-approvals-and-sandbox</code>、Gemini <code>--yolo</code>、Grok <code>--always-approve</code>、Cursor <code>--force</code>）——
             ⚠️ 它会不经询问改文件 / 跑命令，<strong>务必先用 git 管好该项目</strong>以便回滚。
+          </div>
+        </section>
+
+        <section id="img-editor" class="editor hidden">
+          <label class="field-label" for="img-prompt" data-i18n="img.promptLabel">描述 / 提示词</label>
+          <textarea id="img-prompt" class="input-box" rows="3" data-i18n-ph="img.promptPh" placeholder="想画什么，越具体越好，比如：一只戴墨镜的柴犬，扁平插画风，柔和配色"></textarea>
+
+          <label class="field-label" style="margin-top: 12px" data-i18n="img.sourceLabel">出图来源（HTTP 出实图 / 终端 CLI 出 SVG）</label>
+          <select id="img-source"></select>
+
+          <label class="field-label" style="margin-top: 12px" data-i18n="img.ratioLabel">比例</label>
+          <div id="img-ratios" class="geo-styles"></div>
+
+          <label class="field-label" style="margin-top: 12px" data-i18n="img.countLabel">数量</label>
+          <div id="img-counts" class="geo-styles"></div>
+
+          <label class="field-label" style="margin-top: 12px" data-i18n="img.refLabel">参考图（可选，放一张就变「图生图」；仅 HTTP 出图支持）</label>
+          <div class="step-row">
+            <button id="img-ref-pick" data-i18n="img.refPick">选图片</button>
+            <button id="img-ref-clear" class="danger hidden" data-i18n="img.refClear">清除参考图</button>
+            <input id="img-ref-input" type="file" accept="image/*" class="hidden" />
+          </div>
+          <div id="img-ref-preview"></div>
+
+          <div class="ref-hint" data-i18n="img.refHint">
+            文生图：直接写描述出图。图生图：再放一张参考图，在它基础上改。终端 CLI（codex / grok 等）出的是 SVG 矢量图；HTTP 图片源（如火山 Seedream）出真实位图、且支持图生图。
           </div>
         </section>
 

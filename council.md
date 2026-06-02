@@ -142,3 +142,9 @@
 - 修：applyLang() 现在切语言时重渲染全部动态内容（renderSteps + refreshWorkflowList + refreshSkills + applyMode），不只 applyI18n。
 - GEO 风格 chips：之前直接用 s.label（中文，因要喂模型 brief）。新增 geostyle.<key>/.hint 共 20 词条，chip 显示走 t()，s.label/s.hint 仍保留中文供 buildGeoBrief。共 360 词条 × 14 语言。
 - 注：默认示例流水线的步骤内容（写脚本/角色/prompt）是已存进 localStorage 的用户数据，非 UI，不随语言变（可手动编辑）。
+
+### 新增「图像」模式：文生图 + 图生图（v0.1.6）
+- 顶栏新增独立「图像」模式：提示词 + 出图来源 + 比例(1:1/21:9/16:9/9:16/3:4) + 数量(1~4) + 可选参考图。
+- **出图来源**复用 GEO 那套：HTTP 图片源(火山 Seedream 等→真实位图，支持图生图) + 终端 CLI(codex/grok 等→SVG 矢量图)。抽出 imageSourceOptions()/参数化 generateImage() 复用。
+- **图生图**：后端 image_generate 加可选 image 参数——OpenAI 端点走 multipart /images/edits，其它(Seedream)在 body 带 image 字段。Cargo 加 reqwest multipart + base64。
+- **数量**：前端并发调 N 次(provider 无关)；**比例**映射成 size 像素传后端，CLI 出 SVG 时写进画布提示。新增 17 i18n 词条×14 语言(共 377)。

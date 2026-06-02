@@ -1306,3 +1306,25 @@ select:focus {
 .test-status.error {
   color: var(--err);
 }
+
+/* 图像 mode: generated image / SVG output + reference-image thumbnail */
+.img-out {
+  max-width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.img-out img,
+.img-out svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+.img-ref-thumb {
+  max-width: 160px;
+  max-height: 120px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-top: 8px;
+}
