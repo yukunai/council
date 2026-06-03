@@ -165,3 +165,7 @@
 - 之前 CLI 路径要的是 SVG，错了。实测：**grok / codex 自带图片工具，能生成真实 PNG**(各 ~1MB)，用自身 auth、不另需 Key；gemini 这台机器无图片能力(CLI 说没工具 + 图片模型 404)。
 - 新 Rust 命令 `cli_gen_image(program,args,prompt)`：在临时目录跑 CLi(自动批准)生成并保存图片文件，扫最新图片读成 data URL 返回。
 - generateImage 加 `realCli`：图像模式走 cli_gen_image 出真实图；GEO 仍走 SVG(快/矢量)。来源标签 🤖CLI(免Key) / 📷HTTP(需Key)，去掉 SVG 警告与强制切 HTTP。IMG_CLI_INVOKE 存各 CLI 已验证的出图调用。
+
+### 修：图像结果串到别的模式 + 安全加固（v0.1.11）
+- bug：右侧结果栏所有模式共用，图像模式生成的图切到协作编程等仍留在那。修：applyMode 在模式真正切换时清空 resultsEl(切语言等同模式不清)，用 lastAppliedMode 跟踪。
+- 安全：cli_gen_image 的 prompt 以 - 开头时前置空格，防 argv flag smuggling。

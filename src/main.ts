@@ -4081,8 +4081,16 @@ function renderTermSkillList() {
   }
 }
 
+let lastAppliedMode = "";
 function applyMode() {
   const m = mode;
+  // Results are mode-specific — clear the shared results panel when the mode actually changes so a
+  // previous mode's output (e.g. generated images) doesn't linger into another screen. Guarded on
+  // a real mode change so re-renders (e.g. language switch) don't wipe in-view results.
+  if (m !== lastAppliedMode) {
+    resultsEl.innerHTML = "";
+    lastAppliedMode = m;
+  }
   const isTerm = m === "term";
   geoEditor.classList.toggle("hidden", m !== "geo");
   pipeEditor.classList.toggle("hidden", m !== "pipe");
