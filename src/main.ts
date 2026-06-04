@@ -17,6 +17,7 @@ import {
   decodeWorker,
 } from "./utils";
 import { applyI18n, t, tf, getLang, setLang, LANGS, type Lang } from "./i18n";
+import { cacheKey, cacheGet, cachePut } from "./cache";
 
 // Surface otherwise-silent runtime errors (incl. init-time) instead of a dead-looking UI.
 // Registered first so it catches throws during the rest of module evaluation.
@@ -34,6 +35,7 @@ window.addEventListener("unhandledrejection", (e) => {
 type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "video"; url: string }
+  | { type: "usage"; prompt: number; completion: number; cached: number }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -635,6 +637,17 @@ const stepsEl = $<HTMLDivElement>("#steps");
 const resultsEl = $<HTMLDivElement>("#results-list");
 const runBtn = $<HTMLButtonElement>("#run-btn");
 const stopBtn = $<HTMLButtonElement>("#stop-btn");
+
+// "复用缓存" toggle: when on (default), an unchanged HTTP model step reuses its cached output
+// instead of re-billing the model. Off still writes fresh results to the cache, so flipping it
+// off is the way to force-regenerate a step whose cached output you didn't like.
+const LS_REUSE_CACHE = "council.reusecache";
+const reuseCacheEl = $<HTMLInputElement>("#reuse-cache");
+reuseCacheEl.checked = localStorage.getItem(LS_REUSE_CACHE) !== "0";
+reuseCacheEl.addEventListener("change", () =>
+  localStorage.setItem(LS_REUSE_CACHE, reuseCacheEl.checked ? "1" : "0"),
+);
+const reuseCache = (): boolean => reuseCacheEl.checked;
 const settingsModal = $<HTMLDivElement>("#settings-modal");
 const providersList = $<HTMLDivElement>("#providers-list");
 const clisList = $<HTMLDivElement>("#clis-list");
@@ -944,6 +957,7 @@ function runWorker(
   onDelta: (text: string) => void,
   onVideo: (url: string) => void,
   cwd?: string, // CLI workers only: run the agent inside this project folder
+  onUsage?: (u: { prompt: number; completion: number; cached: number }) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -964,6 +978,7 @@ function runWorker(
       if (settled) return;
       if (ev.type === "delta") onDelta(ev.text);
       else if (ev.type === "video") onVideo(ev.url);
+      else if (ev.type === "usage") onUsage?.(ev);
       else if (ev.type === "done") {
         finish();
         resolve();
@@ -1032,15 +1047,30 @@ function workerLabel(worker: string): string {
   return `${w.provider} · ${w.model}`;
 }
 
+// Compact token count for the per-step readout: 850 → "850", 1234 → "1.2k", 12345 → "12k".
+function fmtTok(n: number): string {
+  if (n >= 10000) return Math.round(n / 1000) + "k";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return String(n);
+}
+// Per-step usage line: prompt ↑ / completion ↓, plus the provider context-cache hit rate when any.
+function tokMeta(u: { prompt: number; completion: number; cached: number }): string {
+  let s = `↑${fmtTok(u.prompt)} ↓${fmtTok(u.completion)}`;
+  if (u.cached > 0 && u.prompt > 0) s += " · " + tf("tok.hit", { pct: Math.round((u.cached / u.prompt) * 100) });
+  return s;
+}
+
 function makeResultCard(
   step: Step,
   n: number,
-): { body: HTMLDivElement; setStatus: (s: string, label: string) => void } {
+): { body: HTMLDivElement; setStatus: (s: string, label: string) => void; setMeta: (txt: string) => void } {
   const worker = document.createElement("span");
   worker.className = "result-worker";
   worker.textContent = workerLabel(step.worker) + (step.skill ? ` · ${tf("card.skillTag", { name: step.skill })}` : "");
-  const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras: [worker] });
-  return { body, setStatus };
+  const meta = document.createElement("span");
+  meta.className = "result-meta";
+  const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras: [worker, meta] });
+  return { body, setStatus, setMeta: (txt: string) => (meta.textContent = txt) };
 }
 
 async function run() {
@@ -1093,8 +1123,34 @@ async function runSteps(my: number) {
     const skillText = step.skill ? bodies[step.skill] ?? "" : "";
     const system = [skillText, step.role].map((x) => x.trim()).filter(Boolean).join("\n\n");
     const prompt = fillTemplate(step.prompt, input, outputs, i);
+
+    // Step memoization: an HTTP model step is a pure function of (worker, system, prompt), so an
+    // identical re-run — the common case while iterating a pipeline (tweak step N, the steps before
+    // it are unchanged) — reuses the prior output instead of re-billing the model. CLI / video /
+    // image workers are side-effectful or non-deterministic and are never cached.
+    const cacheable = decodeWorker(step.worker).kind === "http";
+    const key = cacheable ? await cacheKey(step.worker, system, prompt) : "";
+    if (my !== genId) return;
+    if (cacheable && reuseCache()) {
+      const hit = cacheGet(key);
+      if (hit) {
+        const tfh = makeTextFlusher(card.body);
+        tfh.stream(hit.output);
+        tfh.flush();
+        outputs[i] = hit.output;
+        done[i] = true;
+        card.setStatus("done", t("status.cached"));
+        card.setMeta(tf("cache.saved", { n: fmtTok(hit.prompt + hit.completion) }));
+        scheduleScroll();
+        return;
+      }
+    }
+
     let acc = "";
     let videoUrl = "";
+    // Holder (not a bare `let`) so TS keeps the assigned-in-callback value typed instead of
+    // pinning it to the null initializer.
+    const usage: { v: { prompt: number; completion: number; cached: number } | null } = { v: null };
     const textFlush = makeTextFlusher(card.body);
     try {
       await runWorker(
@@ -1121,12 +1177,20 @@ async function runSteps(my: number) {
           card.body.append(video, link);
           scheduleScroll();
         },
+        undefined,
+        (u) => {
+          usage.v = u;
+        },
       );
       // downstream steps can reference the video URL via {{prev}} / {{N}}
       textFlush.flush();
       outputs[i] = videoUrl || acc;
       done[i] = true;
       card.setStatus("done", my !== genId ? t("status.stopped") : t("status.done"));
+      const u = usage.v;
+      if (u) card.setMeta(tokMeta(u));
+      // Memoize the fresh result so the next identical run is free.
+      if (cacheable && acc.trim() && u && my === genId) cachePut(key, { output: acc, ...u });
     } catch (e) {
       textFlush.cancel();
       failed[i] = true;

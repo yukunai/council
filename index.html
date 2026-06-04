@@ -40,6 +40,11 @@
         <button id="open-history" data-i18n="nav.history">历史</button>
         <select id="lang-select" class="lang-select" title="Language"></select>
         <span class="grow"></span>
+        <label class="cache-toggle" data-i18n-title="cache.reuseTitle"
+               title="内容相同的步骤直接复用上次输出，不再消耗 token；改了任何输入会自动重算">
+          <input type="checkbox" id="reuse-cache" checked />
+          <span data-i18n="cache.reuse">复用缓存</span>
+        </label>
         <button id="run-btn" class="primary" data-i18n="btn.run">▶ 运行</button>
         <button id="stop-btn" class="hidden" data-i18n="btn.stop">■ 停止</button>
       </div>

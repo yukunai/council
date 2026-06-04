@@ -21,6 +21,13 @@ struct ChatMessage {
 enum StreamEvent {
     Delta { text: String },
     Video { url: String },
+    // Token usage from the final stream chunk. `cached` is the prompt portion served from the
+    // provider's own context cache (DeepSeek: prompt_cache_hit_tokens; OpenAI: cached_tokens).
+    Usage {
+        prompt: u64,
+        completion: u64,
+        cached: u64,
+    },
     Done,
     Error { message: String },
 }
@@ -51,6 +58,9 @@ async fn chat_stream(
             .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
             .collect::<Vec<_>>(),
         "stream": true,
+        // Ask OpenAI-compatible endpoints to append a final chunk carrying token usage.
+        // DeepSeek/Kimi/Qwen/Volcengine/OpenAI all honor this; the chunk has empty `choices`.
+        "stream_options": { "include_usage": true },
     });
 
     let client = http_client();
@@ -107,6 +117,24 @@ async fn chat_stream(
                 if let Some(t) = v["choices"][0]["delta"]["content"].as_str() {
                     if !t.is_empty() {
                         let _ = on_event.send(StreamEvent::Delta { text: t.to_string() });
+                    }
+                }
+                // Final chunk carries token counts. DeepSeek reports the cache-hit portion as
+                // prompt_cache_hit_tokens; OpenAI nests it under prompt_tokens_details.cached_tokens.
+                let u = &v["usage"];
+                if u.is_object() {
+                    let prompt = u["prompt_tokens"].as_u64().unwrap_or(0);
+                    let completion = u["completion_tokens"].as_u64().unwrap_or(0);
+                    let cached = u["prompt_cache_hit_tokens"]
+                        .as_u64()
+                        .or_else(|| u["prompt_tokens_details"]["cached_tokens"].as_u64())
+                        .unwrap_or(0);
+                    if prompt > 0 || completion > 0 {
+                        let _ = on_event.send(StreamEvent::Usage {
+                            prompt,
+                            completion,
+                            cached,
+                        });
                     }
                 }
             }
