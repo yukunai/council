@@ -1074,7 +1074,19 @@ function makeResultCard(
   worker.textContent = workerLabel(step.worker) + (step.skill ? ` · ${tf("card.skillTag", { name: step.skill })}` : "");
   const meta = document.createElement("span");
   meta.className = "result-meta";
-  const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras: [worker, meta] });
+  const extras: HTMLElement[] = [worker, meta];
+  // Sediment a step that worked back into a reusable skill — prefill the editor with this step's
+  // instruction so the skill library grows from real successes instead of hand-authoring.
+  const instruction = step.role.trim() || step.prompt.trim();
+  if (instruction) {
+    const save = document.createElement("button");
+    save.className = "mini result-act";
+    save.textContent = t("card.saveSkill");
+    save.title = t("card.saveSkillTitle");
+    save.addEventListener("click", () => openSkillEditor(null, { name: step.title.trim(), body: instruction }));
+    extras.push(save);
+  }
+  const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras });
   return { body, setStatus, setMeta: (txt: string) => (meta.textContent = txt) };
 }
 
@@ -1699,7 +1711,12 @@ function renderSkills() {
 
 let editingSkill: string | null = null; // null = new
 let resetSkillDel: () => void = () => {}; // resets the modal 删除 button's armed state
-async function openSkillEditor(name: string | null) {
+// `prefill` (only meaningful when name === null) seeds a brand-new skill from an existing source —
+// e.g. a pipeline step that worked, sedimented into a reusable skill.
+async function openSkillEditor(
+  name: string | null,
+  prefill?: { name?: string; description?: string; body?: string },
+) {
   resetSkillDel();
   editingSkill = name;
   $("#skill-modal-title").textContent = name ? t("skill.editTitle2") : t("skill.newTitle");
@@ -1712,10 +1729,10 @@ async function openSkillEditor(name: string | null) {
   $<HTMLDataListElement>("#skill-cat-list").innerHTML = allCategories()
     .map((c) => `<option value="${escHtml(c)}"></option>`)
     .join("");
-  nameEl.value = name ?? "";
-  descEl.value = "";
+  nameEl.value = name ?? prefill?.name ?? "";
+  descEl.value = prefill?.description ?? "";
   catEl.value = "";
-  bodyEl.value = "";
+  bodyEl.value = prefill?.body ?? "";
   delBtn.classList.toggle("hidden", !name);
   if (name) {
     try {

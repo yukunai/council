@@ -192,6 +192,8 @@ export const ZH: Record<string, string> = {
   "sel.noSkill": "（不挂技能）",
   "card.skillTag": "技能:{name}",
   "card.untitled": "(未命名)",
+  "card.saveSkill": "存为技能",
+  "card.saveSkillTitle": "把这一步的指令固化成可复用技能",
   "video.link": "视频链接（24 小时内有效，记得下载）",
   "status.queued": "排队中…",
   "status.running": "运行中…",

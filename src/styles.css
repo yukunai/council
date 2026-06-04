@@ -1000,6 +1000,12 @@ select:focus {
 .result-copy + .result-status {
   margin-left: 8px;
 }
+.result-act {
+  margin-left: auto;
+}
+.result-act + .result-status {
+  margin-left: 8px;
+}
 .result-edit {
   width: 100%;
   min-height: 140px;
