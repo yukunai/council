@@ -1027,6 +1027,11 @@ function runWorker(
     if (!p.endpoint.trim()) return reject(new Error(`厂商「${p.name}」没填 Endpoint`));
     if (!p.key.trim()) return reject(new Error(`厂商「${p.name}」还没填 API Key`));
 
+    // Prompt-cache contract: the system message goes FIRST and must stay byte-identical across
+    // runs of the same step, because DeepSeek/OpenAI automatic prompt caching keys on the longest
+    // common input prefix — a stable system prefix is what gets billed at the cheap cache-hit rate
+    // (surfaced as 命中% on the card). Never inject per-call dynamic content (timestamps, counters,
+    // randomized ordering) into `system`; keep the variable part in the user message.
     const messages: { role: string; content: string }[] = [];
     if (system.trim()) messages.push({ role: "system", content: system });
     messages.push({ role: "user", content: prompt });
@@ -1089,6 +1094,10 @@ async function run() {
 async function runSteps(my: number) {
   const input = inputEl.value;
   const outputs: string[] = [];
+  // Run-level tallies: spent = tokens actually billed this run; provCached = the prompt portion
+  // the provider served from its own cache (cheap "白嫖"); memoSaved = tokens skipped entirely by
+  // step memoization. Incremented from runStep (single-threaded, so plain += is safe).
+  const tally = { prompt: 0, completion: 0, provCached: 0, memoSaved: 0 };
 
   // Preload each attached skill's body once.
   const bodies: Record<string, string> = {};
@@ -1139,6 +1148,7 @@ async function runSteps(my: number) {
         tfh.flush();
         outputs[i] = hit.output;
         done[i] = true;
+        tally.memoSaved += hit.prompt + hit.completion;
         card.setStatus("done", t("status.cached"));
         card.setMeta(tf("cache.saved", { n: fmtTok(hit.prompt + hit.completion) }));
         scheduleScroll();
@@ -1188,7 +1198,12 @@ async function runSteps(my: number) {
       done[i] = true;
       card.setStatus("done", my !== genId ? t("status.stopped") : t("status.done"));
       const u = usage.v;
-      if (u) card.setMeta(tokMeta(u));
+      if (u) {
+        card.setMeta(tokMeta(u));
+        tally.prompt += u.prompt;
+        tally.completion += u.completion;
+        tally.provCached += u.cached;
+      }
       // Memoize the fresh result so the next identical run is free.
       if (cacheable && acc.trim() && u && my === genId) cachePut(key, { output: acc, ...u });
     } catch (e) {
@@ -1230,10 +1245,27 @@ async function runSteps(my: number) {
     await Promise.all(ready.map((i) => runStep(i)));
   }
 
+  // Run-level token summary — makes provider cache hits (白嫖) and memoization savings visible.
+  let summaryText = "";
+  if (tally.prompt || tally.completion || tally.memoSaved) {
+    const parts = [tf("run.tok", { in: fmtTok(tally.prompt), out: fmtTok(tally.completion) })];
+    if (tally.provCached > 0) parts.push(tf("run.cached", { n: fmtTok(tally.provCached) }));
+    if (tally.memoSaved > 0) parts.push(tf("run.saved", { n: fmtTok(tally.memoSaved) }));
+    summaryText = parts.join(" · ");
+    if (my === genId) {
+      const summary = document.createElement("div");
+      summary.className = "run-summary";
+      summary.textContent = summaryText;
+      resultsEl.appendChild(summary);
+      scheduleScroll();
+    }
+  }
+
   if (my === genId && outputs.some((o) => o && o.trim())) {
     const md =
       `# 流水线\n\n**输入**\n\n${input || "(空)"}\n` +
-      steps.map((s, i) => `\n\n## ${i + 1}. ${s.title || "(未命名)"}\n\n${outputs[i] ?? ""}`).join("");
+      steps.map((s, i) => `\n\n## ${i + 1}. ${s.title || "(未命名)"}\n\n${outputs[i] ?? ""}`).join("") +
+      (summaryText ? `\n\n---\n\n${summaryText}` : "");
     pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || t("mode.pipe"), md);
   }
 }
