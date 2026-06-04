@@ -67,6 +67,7 @@ interface Step {
   role: string;
   prompt: string;
   skill?: string; // attached skill name (its body becomes system prompt)
+  fallback?: string; // optional backup worker, used only if the primary errors or returns empty
 }
 interface SkillInfo {
   name: string;
@@ -715,6 +716,10 @@ function normalizeWorkers(): boolean {
       s.worker = fallback;
       changed = true;
     }
+    if (s.fallback && !valid.has(s.fallback)) {
+      s.fallback = undefined;
+      changed = true;
+    }
   }
   return changed;
 }
@@ -807,6 +812,23 @@ function renderSteps() {
     });
     skillRow.append(skillLabel, skill);
 
+    // optional fallback worker — kicks in only if the primary errors or returns empty
+    const fbRow = document.createElement("div");
+    fbRow.className = "step-row";
+    const fbLabel = document.createElement("span");
+    fbLabel.className = "wfbar-label";
+    fbLabel.textContent = t("step.fallback");
+    fbLabel.title = t("step.fallbackTitle");
+    const fb = document.createElement("select");
+    fb.className = "col";
+    fb.title = t("step.fallbackTitle");
+    fillSelect(fb, opts, step.fallback ?? "", { none: t("step.noFallback") });
+    fb.addEventListener("change", () => {
+      step.fallback = fb.value || undefined;
+      saveSteps();
+    });
+    fbRow.append(fbLabel, fb);
+
     const role = document.createElement("input");
     role.className = "step-role";
     role.value = step.role;
@@ -825,7 +847,7 @@ function renderSteps() {
       saveSteps();
     });
 
-    card.append(head, skillRow, role, prompt);
+    card.append(head, skillRow, fbRow, role, prompt);
     stepsEl.appendChild(card);
   });
   refreshGeoSelectors();
@@ -1145,86 +1167,117 @@ async function runSteps(my: number) {
     const system = [skillText, step.role].map((x) => x.trim()).filter(Boolean).join("\n\n");
     const prompt = fillTemplate(step.prompt, input, outputs, i);
 
-    // Step memoization: an HTTP model step is a pure function of (worker, system, prompt), so an
-    // identical re-run — the common case while iterating a pipeline (tweak step N, the steps before
-    // it are unchanged) — reuses the prior output instead of re-billing the model. CLI / video /
-    // image workers are side-effectful or non-deterministic and are never cached.
-    const cacheable = decodeWorker(step.worker).kind === "http";
-    const key = cacheable ? await cacheKey(step.worker, system, prompt) : "";
-    if (my !== genId) return;
-    if (cacheable && reuseCache()) {
-      const hit = cacheGet(key);
-      if (hit) {
-        const tfh = makeTextFlusher(card.body);
-        tfh.stream(hit.output);
-        tfh.flush();
-        outputs[i] = hit.output;
+    // Primary worker, then the optional fallback — the fallback runs only if the primary errors or
+    // returns empty output. Each attempt memoizes/meters under its OWN worker key.
+    const workers = [step.worker, step.fallback].filter((w): w is string => !!w && !!w.trim());
+
+    for (let attempt = 0; attempt < workers.length; attempt++) {
+      const worker = workers[attempt];
+      const isFallback = attempt > 0;
+      const hasMore = attempt < workers.length - 1;
+
+      // Step memoization: an HTTP model step is a pure function of (worker, system, prompt), so an
+      // identical re-run — the common case while iterating a pipeline (tweak step N, the steps
+      // before it are unchanged) — reuses the prior output instead of re-billing the model. CLI /
+      // video / image workers are side-effectful or non-deterministic and are never cached.
+      const cacheable = decodeWorker(worker).kind === "http";
+      const key = cacheable ? await cacheKey(worker, system, prompt) : "";
+      if (my !== genId) return;
+      if (cacheable && reuseCache()) {
+        const hit = cacheGet(key);
+        if (hit) {
+          const tfh = makeTextFlusher(card.body);
+          tfh.stream(hit.output);
+          tfh.flush();
+          outputs[i] = hit.output;
+          done[i] = true;
+          tally.memoSaved += hit.prompt + hit.completion;
+          card.setStatus("done", isFallback ? t("status.doneFallback") : t("status.cached"));
+          card.setMeta(tf("cache.saved", { n: fmtTok(hit.prompt + hit.completion) }));
+          scheduleScroll();
+          return;
+        }
+      }
+
+      let acc = "";
+      let videoUrl = "";
+      // Holder (not a bare `let`) so TS keeps the assigned-in-callback value typed instead of
+      // pinning it to the null initializer.
+      const usage: { v: { prompt: number; completion: number; cached: number } | null } = { v: null };
+      const textFlush = makeTextFlusher(card.body);
+      try {
+        await runWorker(
+          worker,
+          system,
+          prompt,
+          (text) => {
+            acc += text;
+            textFlush.stream(acc);
+            scheduleScroll();
+          },
+          (url) => {
+            textFlush.flush();
+            videoUrl = url;
+            const video = document.createElement("video");
+            video.className = "result-video";
+            video.controls = true;
+            video.src = url;
+            const link = document.createElement("a");
+            link.className = "result-link";
+            link.href = url;
+            link.target = "_blank";
+            link.textContent = t("video.link");
+            card.body.append(video, link);
+            scheduleScroll();
+          },
+          undefined,
+          (u) => {
+            usage.v = u;
+          },
+        );
+        textFlush.flush();
+        // Stop pressed mid-stream: finalize with the partial output, never fall back.
+        if (my !== genId) {
+          outputs[i] = videoUrl || acc;
+          done[i] = true;
+          card.setStatus("done", t("status.stopped"));
+          return;
+        }
+        const out = videoUrl || acc;
+        // Empty output with a fallback still to try → treat like a failure and fall back.
+        if (!out.trim() && hasMore) {
+          card.body.innerHTML = "";
+          continue;
+        }
+        // downstream steps can reference the video URL via {{prev}} / {{N}}
+        outputs[i] = out;
         done[i] = true;
-        tally.memoSaved += hit.prompt + hit.completion;
-        card.setStatus("done", t("status.cached"));
-        card.setMeta(tf("cache.saved", { n: fmtTok(hit.prompt + hit.completion) }));
-        scheduleScroll();
+        card.setStatus("done", isFallback ? t("status.doneFallback") : t("status.done"));
+        const u = usage.v;
+        if (u) {
+          card.setMeta(tokMeta(u));
+          tally.prompt += u.prompt;
+          tally.completion += u.completion;
+          tally.provCached += u.cached;
+        }
+        // Memoize the fresh result so the next identical run is free.
+        if (cacheable && acc.trim() && u && my === genId) cachePut(key, { output: acc, ...u });
+        return;
+      } catch (e) {
+        textFlush.cancel();
+        if (my !== genId) return;
+        // Error with a fallback still to try → reset the card and fall back.
+        if (hasMore) {
+          card.body.innerHTML = "";
+          card.body.classList.remove("error");
+          continue;
+        }
+        failed[i] = true;
+        card.body.classList.add("error");
+        card.body.textContent = e instanceof Error ? e.message : String(e);
+        card.setStatus("error", t("status.error"));
         return;
       }
-    }
-
-    let acc = "";
-    let videoUrl = "";
-    // Holder (not a bare `let`) so TS keeps the assigned-in-callback value typed instead of
-    // pinning it to the null initializer.
-    const usage: { v: { prompt: number; completion: number; cached: number } | null } = { v: null };
-    const textFlush = makeTextFlusher(card.body);
-    try {
-      await runWorker(
-        step.worker,
-        system,
-        prompt,
-        (text) => {
-          acc += text;
-          textFlush.stream(acc);
-          scheduleScroll();
-        },
-        (url) => {
-          textFlush.flush();
-          videoUrl = url;
-          const video = document.createElement("video");
-          video.className = "result-video";
-          video.controls = true;
-          video.src = url;
-          const link = document.createElement("a");
-          link.className = "result-link";
-          link.href = url;
-          link.target = "_blank";
-          link.textContent = t("video.link");
-          card.body.append(video, link);
-          scheduleScroll();
-        },
-        undefined,
-        (u) => {
-          usage.v = u;
-        },
-      );
-      // downstream steps can reference the video URL via {{prev}} / {{N}}
-      textFlush.flush();
-      outputs[i] = videoUrl || acc;
-      done[i] = true;
-      card.setStatus("done", my !== genId ? t("status.stopped") : t("status.done"));
-      const u = usage.v;
-      if (u) {
-        card.setMeta(tokMeta(u));
-        tally.prompt += u.prompt;
-        tally.completion += u.completion;
-        tally.provCached += u.cached;
-      }
-      // Memoize the fresh result so the next identical run is free.
-      if (cacheable && acc.trim() && u && my === genId) cachePut(key, { output: acc, ...u });
-    } catch (e) {
-      textFlush.cancel();
-      failed[i] = true;
-      if (my !== genId) return;
-      card.body.classList.add("error");
-      card.body.textContent = e instanceof Error ? e.message : String(e);
-      card.setStatus("error", t("status.error"));
     }
   };
 
