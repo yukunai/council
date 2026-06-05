@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render the council app icon to a transparent RGBA PNG (no white background).
-Monogram 'C': dark rounded square + a blue-gradient C stroke with round caps."""
+'C of nodes': dark rounded square + five blue-gradient dots arranged as an open
+C (a ring of seats with a gap on the right) — the council's C, made of models."""
 from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import math
@@ -21,29 +22,28 @@ row = (top[None, :] * (1 - ys[:, None]) + bot[None, :] * ys[:, None]).astype(np.
 grad = np.repeat(row[:, None, :], W, axis=1)
 base.paste(Image.fromarray(grad, "RGB").convert("RGBA"), (0, 0), mask)
 
-# --- C monogram mask: arc open on the right + rounded end caps ---
+# --- C of nodes: five dots on an open ring, gap on the right = the C opening ---
 Cx, Cy, R = sc(512), sc(512), sc(300)
-stroke = sc(122)
-cmask = Image.new("L", (W, W), 0)
-cd = ImageDraw.Draw(cmask)
-cd.arc([Cx - R, Cy - R, Cx + R, Cy + R], 55, 305, fill=255, width=stroke)
-cap = stroke // 2
-for a in (55, 305):
-    ex = Cx + R * math.cos(math.radians(a))
-    ey = Cy + R * math.sin(math.radians(a))
-    cd.ellipse([ex - cap, ey - cap, ex + cap, ey + cap], fill=255)
+dot = sc(86)
+angles = [305, 250, 180, 110, 55]   # degrees (PIL: x=cos, y=sin, y down)
+nodes = [(Cx + R * math.cos(math.radians(a)), Cy + R * math.sin(math.radians(a))) for a in angles]
 
-# soft glow behind the C
+nmask = Image.new("L", (W, W), 0)
+nd = ImageDraw.Draw(nmask)
+for (nx, ny) in nodes:
+    nd.ellipse([nx - dot, ny - dot, nx + dot, ny + dot], fill=255)
+
+# soft glow behind the nodes
 glow = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-glow.paste((106, 163, 255, 150), (0, 0), cmask)
+glow.paste((106, 163, 255, 150), (0, 0), nmask)
 base.alpha_composite(glow.filter(ImageFilter.GaussianBlur(sc(26))))
 
-# diagonal gradient fill (light top-left -> accent bottom-right) through the mask
-c1, c2 = np.array([176, 214, 255]), np.array([74, 140, 240])
+# diagonal gradient fill (light top-left -> accent bottom-right) through the node mask
+c1, c2 = np.array([188, 217, 255]), np.array([74, 140, 240])
 xx, yy = np.meshgrid(np.arange(W), np.arange(W))
 t = np.clip((xx + yy) / (2 * W), 0, 1)
 cg = (c1[None, None, :] * (1 - t[..., None]) + c2[None, None, :] * t[..., None]).astype(np.uint8)
-base.paste(Image.fromarray(cg, "RGB").convert("RGBA"), (0, 0), cmask)
+base.paste(Image.fromarray(cg, "RGB").convert("RGBA"), (0, 0), nmask)
 
 base.resize((1024, 1024), Image.LANCZOS).save("logo-master.png")
-print("wrote logo-master.png (transparent RGBA, monogram C)")
+print("wrote logo-master.png (transparent RGBA, C-of-nodes)")
