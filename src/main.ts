@@ -4859,6 +4859,10 @@ for (const l of LANGS) {
 langSel.value = getLang();
 langSel.addEventListener("change", () => {
   setLang(langSel.value as Lang);
-  applyLang();
+  // Full reload so ALL JS-built UI re-localizes — applyLang only refreshes
+  // data-i18n elements + a few re-rendered editors, leaving dynamically built
+  // parts (terminal panes/tabs, etc.) stale in the previous language. State is
+  // in localStorage, so a reload is safe; it re-renders everything from cur.
+  location.reload();
 });
 applyLang();
