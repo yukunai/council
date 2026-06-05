@@ -361,11 +361,10 @@ if (images.length === 0 && !localStorage.getItem("council.imgseed")) {
   localStorage.setItem(LS_IMAGES, JSON.stringify(images));
   localStorage.setItem("council.imgseed", "1");
 }
-// Default to pipeline (the primary workflow). LS_MODE is saved on switch but we deliberately
-// do NOT restore it at cold launch — user always starts on a focused primary view.
-// "term" is still reachable via the segmented button and spawns panes on demand.
-let mode: string = "pipe";
-if (!["pipe", "geo", "rt", "code", "term", "img"].includes(mode)) mode = "pipe";
+// Default to the terminal (the first screen). LS_MODE is saved on switch but we deliberately
+// do NOT restore it at cold launch — the user always starts on this view.
+let mode: string = "term";
+if (!["pipe", "geo", "rt", "code", "term", "img"].includes(mode)) mode = "term";
 
 // One-time arg fixes for CLIs added before the presets were corrected:
 //  - grok with empty args fails ("unrecognized subcommand") → needs `-p`.
