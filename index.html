@@ -26,17 +26,17 @@
         </span>
         <span class="tagline" data-i18n="tagline">多模型工作流</span>
         <span class="seg">
-          <button id="mode-pipe" class="seg-btn active" data-i18n="mode.pipe">流水线</button>
-          <button id="mode-geo" class="seg-btn" data-i18n="mode.geo">单篇</button>
+          <button id="mode-pipe" class="seg-btn active" data-i18n="mode.pipe">工作流</button>
+          <button id="mode-geo" class="seg-btn" data-i18n="mode.geo">GEO</button>
           <button id="mode-rt" class="seg-btn" data-i18n="mode.rt">圆桌</button>
-          <button id="mode-code" class="seg-btn" data-i18n="mode.code">协作编程</button>
+          <button id="mode-code" class="seg-btn" data-i18n="mode.code">任务编排</button>
           <button id="mode-term" class="seg-btn" data-i18n="mode.term">终端</button>
           <button id="mode-img" class="seg-btn" data-i18n="mode.img">图像</button>
         </span>
         <button id="toggle-skills" data-i18n="nav.skills">技能</button>
         <button id="add-step" data-i18n="nav.addStep">＋ 步骤</button>
-        <button id="open-market" data-i18n="nav.market">模型市场</button>
-        <button id="open-settings" data-i18n="nav.settings">厂商 / 命令 / Key</button>
+        <button id="open-market" data-i18n="nav.market">模型库</button>
+        <button id="open-settings" data-i18n="nav.settings">接入</button>
         <button id="open-history" data-i18n="nav.history">历史</button>
         <select id="lang-select" class="lang-select" title="Language"></select>
         <span class="grow"></span>
@@ -213,7 +213,7 @@
 
           <label class="field-label" style="margin-top: 12px" data-i18n="img.sourceLabel">出图来源（HTTP 出实图 / 终端 CLI 出 SVG）</label>
           <select id="img-source"></select>
-          <div id="img-svg-warn" class="ref-hint hidden" data-i18n="img.svgWarn">⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「厂商 / 命令 / Key」填 API Key）。</div>
+          <div id="img-svg-warn" class="ref-hint hidden" data-i18n="img.svgWarn">⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「接入」填 API Key）。</div>
 
           <label class="field-label" style="margin-top: 12px" data-i18n="img.typeLabel">类型</label>
           <div id="img-types" class="geo-styles"></div>
@@ -262,9 +262,9 @@
 
     <div id="market-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title" data-i18n="market.title">模型市场</div>
+        <div class="modal-title" data-i18n="market.title">模型库</div>
         <p class="modal-note" data-i18n="market.note">
-          一键添加。HTTP 厂商添加后到「厂商 / 命令 / Key」填 API Key；本地 CLI 需要你机器上已装好对应命令。
+          一键添加。HTTP 厂商添加后到「接入」填 API Key；本地 CLI 需要你机器上已装好对应命令。
           端点和模型名随厂商更新会变，添加后都能自行修改。
         </p>
         <div class="market-section" data-i18n="market.secHttp">HTTP 厂商（OpenAI 兼容）</div>
@@ -283,7 +283,7 @@
 
     <div id="settings-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title" data-i18n="settings.title">厂商 / 命令 / Key</div>
+        <div class="modal-title" data-i18n="settings.title">接入</div>
         <p class="modal-note" data-i18n-html="settings.note">
           HTTP 厂商：Endpoint 填到 <code>/chat/completions</code> 为止，Key 只存在本机。
           本地命令：填程序名和固定参数，运行时指令会作为最后一个参数传入（如 <code>claude -p &lt;指令&gt;</code>）。
@@ -395,7 +395,7 @@
 
     <div id="code-hist-modal" class="modal hidden">
       <div class="modal-box">
-        <div class="modal-title" data-i18n="ch.title">协作编程 · 历史任务</div>
+        <div class="modal-title" data-i18n="ch.title">任务编排 · 历史任务</div>
         <p class="modal-note" data-i18n="ch.note">每次「运行」自动存一份配置（目录 + 任务 + Agents，最近 30 份，存本机）。点一条即填回表单。</p>
         <div id="code-hist-list" class="codehist-list"></div>
         <div class="modal-btns">
@@ -409,7 +409,7 @@
     <div id="history-modal" class="modal hidden">
       <div class="modal-box wide">
         <div class="modal-title" data-i18n="hist.title">运行历史</div>
-        <p class="modal-note" data-i18n="hist.note">流水线 / 圆桌 / GEO 每次运行完自动存结果；协作编程任务（标「协作编程」）也在这里，点它即填回表单继续。点左侧条目查看 / 加载，可删除。</p>
+        <p class="modal-note" data-i18n="hist.note">工作流 / 圆桌 / GEO 每次运行完自动存结果；任务编排任务（标「任务编排」）也在这里，点它即填回表单继续。点左侧条目查看 / 加载，可删除。</p>
         <div class="history-wrap">
           <div id="history-list" class="history-list"></div>
           <pre id="history-view" class="history-view"></pre>
