@@ -535,6 +535,10 @@ const CLI_LAUNCH: Record<string, CliLaunch> = {
   grok: { auto: ["--always-approve"], promptArg: false },
   "cursor-agent": { auto: ["--force"], promptArg: true },
 };
+// Baseline args when launching a CLI interactively from the 终端 launcher (whatever the
+// user types in the args box is appended). gemini opens stuck on a "trust this folder?"
+// gate otherwise, so its terminal never really comes up; the others start fine bare.
+const LAUNCH_DEFAULT_ARGS: Record<string, string[]> = { gemini: ["--skip-trust"] };
 // The coding CLIs we know how to drive (value = bare program name); the 协作编程 model
 // dropdown offers these without needing them pre-added in 设置.
 const CODING_CLIS = [
@@ -3790,7 +3794,9 @@ class Term {
           <button data-prog="">▶ ${escHtml(t("mode.term"))}</button>
           <button data-prog="claude">▶ Claude</button>
           <button data-prog="codex">▶ Codex</button>
+          <button data-prog="gemini">▶ Gemini</button>
           <button data-prog="grok">▶ Grok</button>
+          <button data-prog="cursor-agent">▶ Cursor</button>
         </div>
       </div>`;
     const cwdInput = this.host.querySelector(".cwd") as HTMLInputElement;
@@ -3802,8 +3808,10 @@ class Term {
     this.host.querySelectorAll<HTMLButtonElement>(".launch-btns button").forEach((b) =>
       b.addEventListener("click", () => {
         const cwd = cwdInput.value || "~";
+        const prog = b.dataset.prog ?? "";
         const argStr = (this.host.querySelector(".args") as HTMLInputElement).value.trim();
-        this.launch(b.dataset.prog ?? "", argStr ? argStr.split(/\s+/) : [], cwd);
+        const base = LAUNCH_DEFAULT_ARGS[prog] ?? [];
+        this.launch(prog, [...base, ...(argStr ? argStr.split(/\s+/) : [])], cwd);
       }),
     );
   }
