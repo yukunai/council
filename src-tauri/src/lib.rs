@@ -1107,7 +1107,7 @@ fn find_skill_dirs(root: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>)
     }
 }
 
-fn run_git(args: &[&str], cwd: &Path) -> (bool, String) {
+fn run_git(args: &[&str], cwd: &Path, timeout_secs: u64) -> (bool, String) {
     use std::io::Read;
     // Make git fully non-interactive: a GUI app has no tty, so any credential / SSH
     // host-key / passphrase prompt would otherwise hang forever. Null stdin + these
@@ -1153,7 +1153,7 @@ fn run_git(args: &[&str], cwd: &Path) -> (bool, String) {
     }
     drop(tx);
 
-    let timeout = std::time::Duration::from_secs(45);
+    let timeout = std::time::Duration::from_secs(timeout_secs);
     let start = std::time::Instant::now();
     let success = loop {
         match child.try_wait() {
@@ -1164,9 +1164,11 @@ fn run_git(args: &[&str], cwd: &Path) -> (bool, String) {
                     let _ = child.wait();
                     return (
                         false,
-                        "git 超时（>45 秒）已中止——多半是远程认证卡住（HTTPS 凭证或 SSH 确认）。\
-                         请确认仓库 URL 和你本机的 git 凭证 / SSH key 已配好。"
-                            .to_string(),
+                        format!(
+                            "git 超时（>{timeout_secs} 秒）已中止。可能原因：① 仓库很大 / 网络慢，\
+                             下载没跑完；② 远程认证卡住（私有仓库需 HTTPS 凭证或 SSH key）。\
+                             如果只想要某个技能，可在 GitHub 上单独下载它的 SKILL.md，再用「选文件」导入。"
+                        ),
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1190,8 +1192,9 @@ fn skills_download(url: String, on_event: Channel<StreamEvent>) {
         let _ = std::fs::remove_dir_all(&tmp);
         on_event.send(StreamEvent::Delta { text: format!("clone {url}\n") }).ok();
         let (ok, out) = run_git(
-            &["clone", "--depth", "1", &url, tmp.to_string_lossy().as_ref()],
+            &["clone", "--depth", "1", "--single-branch", "--no-tags", &url, tmp.to_string_lossy().as_ref()],
             &std::env::temp_dir(),
+            300, // big skill repos (lots of example images) can take minutes
         );
         let _ = on_event.send(StreamEvent::Delta { text: out });
         if !ok {
@@ -1246,7 +1249,7 @@ fn skills_upload(url: String, message: String, on_event: Channel<StreamEvent>) {
             vec!["push", "-u", "origin", "HEAD:main"],
         ];
         for args in &steps {
-            let (ok, out) = run_git(args, &dir);
+            let (ok, out) = run_git(args, &dir, 120);
             if !out.trim().is_empty() {
                 let _ = on_event.send(StreamEvent::Delta { text: format!("$ git {}\n{}\n", args.join(" "), out) });
             }
