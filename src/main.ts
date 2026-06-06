@@ -1693,6 +1693,7 @@ async function refreshSkills() {
   // keep the per-participant / per-agent 技能 dropdowns in sync with the library
   renderRtParticipants();
   renderCodeAgents();
+  renderDraw(); // 图像 mode's #img-skill picker also lists every skill — keep it in sync too
   if (!skillsModal.classList.contains("hidden")) renderSkillsModal();
 }
 
@@ -2447,7 +2448,10 @@ const IMG_STYLES: { key: string; hint: string }[] = [
   { key: "ink", hint: "中国水墨国风，留白写意，毛笔笔触" },
 ];
 
-type ImgResult = { kind: "svg" | "url" | "err"; data: string };
+// `data` is what the <img> shows (asset URL for CLI files, the url/data-URL for HTTP providers).
+// `raw` is the underlying source to save on download — the real file path for CLI outputs (an
+// asset:// URL can't be re-fetched), else same as `data`. Falls back to `data` when absent.
+type ImgResult = { kind: "svg" | "url" | "err"; data: string; raw?: string };
 
 async function generateCliImages(
   desc: string,
@@ -2469,7 +2473,7 @@ async function generateCliImages(
   try {
     const paths = await invoke<string[]>("cli_gen_images", { program: c.program, args: inv, prompt: p, count: n });
     if (!paths.length) return [{ kind: "err", data: t("img.cliNoImage") }];
-    return paths.slice(0, n).map((path) => ({ kind: "url", data: convertFileSrc(path) }));
+    return paths.slice(0, n).map((path) => ({ kind: "url" as const, data: convertFileSrc(path), raw: path }));
   } catch (e) {
     return [{ kind: "err", data: e instanceof Error ? e.message : String(e) }];
   }
@@ -2627,12 +2631,21 @@ function renderImgResultInto(body: HTMLElement, res: ImgResult) {
   im.className = "img-out";
   im.src = res.data;
   body.appendChild(im);
+  // <a download> is ignored for cross-origin asset:// / https:// URLs in the webview, so save via
+  // the backend (native save dialog + write) instead of relying on the browser's download.
   const a = document.createElement("a");
   a.className = "result-link";
   a.textContent = t("img.download");
-  a.href = res.data;
-  a.target = "_blank";
-  a.download = "council-image.png";
+  a.href = "#";
+  a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      const saved = await invoke<string | null>("export_image", { src: res.raw ?? res.data });
+      if (saved) toast(tf("img.saved", { path: saved }), "info");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), "error");
+    }
+  });
   body.appendChild(a);
 }
 

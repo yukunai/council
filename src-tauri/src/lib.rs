@@ -765,6 +765,9 @@ fn cli_gen_images(
         prompt
     };
     cmd.arg(&safe_prompt);
+    // Timestamp the run so we can later tell which images in a CLI's own output dir (below) this
+    // invocation produced, vs. ones left over from earlier sessions.
+    let start = SystemTime::now();
     let out = cmd
         .current_dir(&dir)
         .env("PATH", full_path())
@@ -800,14 +803,63 @@ fn cli_gen_images(
             }
         }
     }
+    // Some CLIs (notably codex's `imagegen` skill) ignore "save to the current directory" and write
+    // to their own fixed location (~/.codex/generated_images/<session>/<id>.png), so the cwd scan
+    // above comes up empty even though an image WAS generated. If short, pull in images that dir
+    // produced during this run (mtime >= start guards against grabbing earlier sessions' files).
+    if found.len() < want {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mut stack = vec![Path::new(&home).join(".codex/generated_images")];
+        while let Some(d) = stack.pop() {
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                        continue;
+                    }
+                    let ext = p
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if !exts.contains(&ext.as_str()) {
+                        continue;
+                    }
+                    let m = e
+                        .metadata()
+                        .and_then(|md| md.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    if m >= start {
+                        found.push((m, p));
+                    }
+                }
+            }
+        }
+    }
     found.sort_by(|a, b| {
         let name_a = a.1.file_name().and_then(|x| x.to_str()).unwrap_or("");
         let name_b = b.1.file_name().and_then(|x| x.to_str()).unwrap_or("");
         name_a.cmp(name_b).then_with(|| a.0.cmp(&b.0))
     });
     let mut paths = Vec::new();
-    for (_, p) in found.into_iter().take(want) {
-        paths.push(p.to_string_lossy().to_string());
+    for (idx, (_, p)) in found.into_iter().take(want).enumerate() {
+        if p.starts_with(&dir) {
+            paths.push(p.to_string_lossy().to_string());
+        } else {
+            // Image came from a CLI's own output dir — copy it into our temp dir so the returned
+            // path stays inside the directory the app already serves, leaving the original in place.
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("png")
+                .to_lowercase();
+            let dest = dir.join(format!("council-{}.{}", idx + 1, ext));
+            match std::fs::copy(&p, &dest) {
+                Ok(_) => paths.push(dest.to_string_lossy().to_string()),
+                Err(_) => paths.push(p.to_string_lossy().to_string()),
+            }
+        }
     }
     if paths.is_empty() {
         let tail: String = String::from_utf8_lossy(&out.stderr)
@@ -892,6 +944,47 @@ p"#;
     }
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     Ok(Some(path))
+}
+
+// Save a generated image to a user-chosen location. `src` is whatever the frontend holds for the
+// image: a local file path (CLI output), a `data:` URL, or an http(s) URL (HTTP provider). The
+// browser's `<a download>` is a no-op for cross-origin asset:// / https:// URLs inside the webview,
+// so the download flows through here instead. Returns the saved path, or None if cancelled.
+#[tauri::command]
+async fn export_image(src: String) -> Result<Option<String>, String> {
+    let lower = src.to_lowercase();
+    let default_name = if lower.contains(".jpg")
+        || lower.contains(".jpeg")
+        || lower.starts_with("data:image/jpeg")
+    {
+        "council-image.jpg"
+    } else {
+        "council-image.png"
+    };
+    // Pick the destination first (cancel = no-op) so we don't fetch bytes the user won't keep.
+    let script = format!(
+        "set p to \"\"\ntry\nset p to POSIX path of (choose file name with prompt \"保存图片\" default name \"{default_name}\")\nend try\np"
+    );
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let dest = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if dest.is_empty() {
+        return Ok(None);
+    }
+    let bytes = if src.starts_with("data:") || src.starts_with("http://") || src.starts_with("https://") {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
+        load_image_bytes(&src, &client).await?.0
+    } else {
+        std::fs::read(&src).map_err(|e| e.to_string())?
+    };
+    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+    Ok(Some(dest))
 }
 
 // ---- workflow files: saved as ~/.council/workflows/<name>.json ----
@@ -1290,6 +1383,7 @@ pub fn run() {
             save_clip_image,
             pick_folder,
             new_folder,
+            export_image,
             fetch_url,
             image_generate,
             video_generate,

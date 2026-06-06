@@ -434,6 +434,7 @@ export const ZH: Record<string, string> = {
   "img.refHint": "🤖 终端 CLI（grok / codex 等）用自身图片能力直接出真实图，不用另配 Key（部分 CLI 如 gemini 没有图片能力，会提示）。📷 HTTP 图片源（火山 Seedream 等）出图需先在「接入」填 API Key。图生图（放参考图）目前仅 📷 HTTP 源支持。",
   "img.cardTitle": "图像 {i}",
   "img.download": "下载",
+  "img.saved": "已保存到 {path}",
   "empty.img": "填描述、选来源、选比例和数量，点运行出图。",
   "toast.fillImgPrompt": "先填图像描述",
   "toast.pickImgSource": "先选一个出图来源",
