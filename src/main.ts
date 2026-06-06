@@ -1952,6 +1952,13 @@ async function uploadSkills() {
 
 // Import skills straight from local files: a picked SKILL.md (or several), or a folder
 // whose subfolders each hold a SKILL.md. Reads the text and copies into the skill library.
+// The category to drop imported skills into: the one currently selected (skills-library modal's
+// column if it's open, else the left sidebar filter), so importing while viewing a category lands
+// the skill right there instead of in 未分类. Returns "" when viewing 全部 / 未分类.
+function activeImportCategory(): string {
+  const c = !skillsModal.classList.contains("hidden") ? sklCat : sidebarCat;
+  return c && c !== "全部" && c !== "未分类" ? c : "";
+}
 async function importLocalSkills(fileList: FileList | null) {
   if (!fileList || !fileList.length) return;
   const all = Array.from(fileList).filter((f) => /\.(md|markdown)$/i.test(f.name));
@@ -1977,10 +1984,13 @@ async function importLocalSkills(fileList: FileList | null) {
         const parts = rel.split("/").filter(Boolean);
         name = parts.length >= 2 ? parts[parts.length - 2] : f.name.replace(/\.(md|markdown)$/i, "");
       }
+      // A selected category wins (import into the category you're viewing); otherwise keep the
+      // skill's own declared category, else uncategorized.
+      const active = activeImportCategory();
       await invoke("save_skill", {
         name,
         description: descM ? descM[1].trim() : "",
-        category: catM ? catM[1].trim() : "",
+        category: active || (catM ? catM[1].trim() : ""),
         body: skillBody(text),
       });
       syncOutput.textContent += `✓ ${name}\n`;
