@@ -301,7 +301,7 @@ const PRESETS: Preset[] = [
 const CLI_PRESETS: { name: string; program: string; args: string; note?: string }[] = [
   { name: "Claude Code", program: "claude", args: "-p" },
   { name: "Codex (GPT)", program: "codex", args: "exec --skip-git-repo-check" },
-  { name: "Gemini CLI", program: "gemini", args: "-p --skip-trust" },
+  { name: "Gemini CLI", program: "gemini", args: "--skip-trust -p" },
   { name: "Grok CLI", program: "grok", args: "-p", note: "grok -p <提示>（单轮，打印到 stdout）；用法不同就改这里" },
   {
     name: "Cursor Agent",
@@ -385,7 +385,20 @@ if (!["pipe", "geo", "rt", "code", "term", "img"].includes(mode)) mode = "term";
       fixed = true;
     }
     if (prog === "codex") ensure(c, "--skip-git-repo-check");
-    if (prog === "gemini") ensure(c, "--skip-trust");
+    if (prog === "gemini") {
+      ensure(c, "--skip-trust");
+      // The prompt is appended as the final arg, so `-p`/`--prompt` must be the LAST flag —
+      // anything sitting between it and the prompt (e.g. --skip-trust) steals -p's value and
+      // gemini dies with "Not enough arguments following: p". Move it to the end.
+      const toks = c.args.split(/\s+/).filter(Boolean);
+      const pIdx = toks.findIndex((x) => x === "-p" || x === "--prompt");
+      if (pIdx !== -1 && pIdx !== toks.length - 1) {
+        const [p] = toks.splice(pIdx, 1);
+        toks.push(p);
+        c.args = toks.join(" ");
+        fixed = true;
+      }
+    }
   }
   if (fixed) saveClis();
 }
