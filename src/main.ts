@@ -652,6 +652,23 @@ const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as
 const inputEl = $<HTMLTextAreaElement>("#pipe-input");
 const stepsEl = $<HTMLDivElement>("#steps");
 const resultsEl = $<HTMLDivElement>("#results-list");
+// Each mode keeps its OWN results in a persistent box inside #results-list; switching modes only
+// shows/hides boxes (no node moving), so a run's output survives mode switches — even rounds
+// produced while you're away append to that mode's (hidden) box and are there when you return.
+let activeResultsMode = "pipe"; // the mode whose run is currently producing results
+function modeBox(m: string): HTMLDivElement {
+  let b = resultsEl.querySelector<HTMLDivElement>(`.rbox[data-rmode="${m}"]`);
+  if (!b) {
+    b = document.createElement("div");
+    b.className = "rbox";
+    b.dataset.rmode = m;
+    resultsEl.appendChild(b);
+  }
+  return b;
+}
+function resultsBox(): HTMLDivElement {
+  return modeBox(activeResultsMode);
+}
 const runBtn = $<HTMLButtonElement>("#run-btn");
 const stopBtn = $<HTMLButtonElement>("#stop-btn");
 
@@ -937,8 +954,8 @@ function cardShell(
   const body = document.createElement("div");
   body.className = "result-body";
   if (opts.body !== false) card.appendChild(body);
-  if (opts.prepend) resultsEl.prepend(card);
-  else resultsEl.appendChild(card);
+  if (opts.prepend) resultsBox().prepend(card);
+  else resultsBox().appendChild(card);
   return {
     card,
     body,
@@ -956,7 +973,8 @@ function beginRun(): number {
   cancelCurrent = null;
   runBtn.classList.add("hidden");
   stopBtn.classList.remove("hidden");
-  resultsEl.innerHTML = "";
+  activeResultsMode = mode; // results from this run belong to the current mode
+  modeBox(mode).replaceChildren(); // clear only this mode's results, not other modes'
   return my;
 }
 
@@ -1337,7 +1355,7 @@ async function runSteps(my: number) {
       const summary = document.createElement("div");
       summary.className = "run-summary";
       summary.textContent = summaryText;
-      resultsEl.appendChild(summary);
+      resultsBox().appendChild(summary);
       scheduleScroll();
     }
   }
@@ -2670,7 +2688,7 @@ async function runDraw() {
   const fullPrompt = [skillText.trim(), typeHint, styleHint, draw.prompt.trim()].filter(Boolean).join("\n");
   const my = beginRun();
   try {
-    resultsEl.innerHTML = "";
+    resultsBox().replaceChildren(); // beginRun already cleared this mode's box; keep explicit
     const n = Math.max(1, Math.min(4, draw.n));
     const cards = Array.from({ length: n }, (_, i) => {
       const c = cardShell(tf("img.cardTitle", { i: i + 1 }));
@@ -4290,16 +4308,12 @@ function renderTermSkillList() {
   }
 }
 
-let lastAppliedMode = "";
 function applyMode() {
   const m = mode;
-  // Results are mode-specific — clear the shared results panel when the mode actually changes so a
-  // previous mode's output (e.g. generated images) doesn't linger into another screen. Guarded on
-  // a real mode change so re-renders (e.g. language switch) don't wipe in-view results.
-  if (m !== lastAppliedMode) {
-    resultsEl.innerHTML = "";
-    lastAppliedMode = m;
-  }
+  // Show only the current mode's results box; the others stay in the DOM (hidden) so their content
+  // (and any in-flight run still appending to them) is preserved across switches.
+  modeBox(m); // ensure it exists
+  resultsEl.querySelectorAll<HTMLElement>(".rbox").forEach((b) => b.classList.toggle("hidden", b.dataset.rmode !== m));
   const isTerm = m === "term";
   geoEditor.classList.toggle("hidden", m !== "geo");
   pipeEditor.classList.toggle("hidden", m !== "pipe");
@@ -4333,13 +4347,14 @@ function applyMode() {
     else refitAllPanes();
   }
   // Per-mode empty-state hint (pipe has its own inline ref-hint, so no entry here).
+  const box = modeBox(m);
+  box.querySelector(".empty")?.remove();
   const hint = EMPTY_HINTS[m];
-  if (hint && !resultsEl.children.length) {
+  if (hint && !box.children.length) {
     const el = document.createElement("div");
-    el.id = "geo-empty-hint";
     el.className = "empty";
     el.textContent = t(hint);
-    resultsEl.appendChild(el);
+    box.appendChild(el);
   }
 }
 // Values are i18n keys, resolved via t() in applyMode so they follow the current language.
