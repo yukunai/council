@@ -4482,6 +4482,21 @@ $("#img-clear").addEventListener("click", () => {
   $<HTMLTextAreaElement>("#img-prompt").value = "";
   saveDraw();
 });
+// One-click clear for the other big text inputs (圆桌问题 / 工作流输入 / GEO 素材).
+$("#rt-clear").addEventListener("click", () => {
+  rt.question = "";
+  $<HTMLTextAreaElement>("#rt-question").value = "";
+  saveRt();
+});
+$("#pipe-clear").addEventListener("click", () => {
+  inputEl.value = "";
+  localStorage.setItem(LS_INPUT, "");
+});
+$("#geo-material-clear").addEventListener("click", () => {
+  geo.material = "";
+  $<HTMLTextAreaElement>("#geo-material").value = "";
+  saveGeo();
+});
 $<HTMLSelectElement>("#img-source").addEventListener("change", (e) => {
   draw.worker = (e.target as HTMLSelectElement).value;
   saveDraw();

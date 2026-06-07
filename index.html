@@ -73,7 +73,10 @@
         <div id="side-splitter" class="splitter hidden" data-i18n-title="side.splitterTitle" title="拖动调整技能栏宽度"></div>
 
         <section id="pipe-editor" class="editor">
-          <label class="field-label" for="pipe-input" data-i18n-html="pipe.inputLabel">输入（用 <code>{{input}}</code> 引用）</label>
+          <div class="geo-sub-head">
+            <label class="field-label" for="pipe-input" style="margin: 0" data-i18n-html="pipe.inputLabel">输入（用 <code>{{input}}</code> 引用）</label>
+            <button id="pipe-clear" class="mini" type="button" data-i18n="img.clear">清除</button>
+          </div>
           <textarea id="pipe-input" class="input-box" rows="3" data-i18n-ph="pipe.inputPh" placeholder="整条工作流要处理的素材，比如一段原始文案 / 主题…"></textarea>
           <div id="steps"></div>
           <div class="ref-hint" data-i18n-html="pipe.refHint">
@@ -85,7 +88,10 @@
           <label class="field-label" for="geo-title" data-i18n="geo.titleLabel">标题 / 主题</label>
           <input id="geo-title" class="input-box" data-i18n-ph="geo.titlePh" placeholder="比如：家用咖啡机怎么选 / 2026 川西环线自驾指南" />
 
-          <label class="field-label" for="geo-material" style="margin-top: 12px" data-i18n="geo.materialLabel">原文 / 素材（可选，贴进来会直接改写成文章）</label>
+          <div class="geo-sub-head" style="margin-top: 12px">
+            <label class="field-label" for="geo-material" style="margin: 0" data-i18n="geo.materialLabel">原文 / 素材（可选，贴进来会直接改写成文章）</label>
+            <button id="geo-material-clear" class="mini" type="button" data-i18n="img.clear">清除</button>
+          </div>
           <textarea id="geo-material" class="input-box" rows="4" data-i18n-ph="geo.materialPh" placeholder="把要改写的原文、笔记、要点直接贴这里——不用是链接或地点"></textarea>
 
           <label class="field-label" for="geo-source" style="margin-top: 12px" data-i18n="geo.sourceLabel">参考链接（可选，填了会抓取正文并改写）</label>
@@ -134,7 +140,10 @@
         </section>
 
         <section id="rt-editor" class="editor hidden">
-          <label class="field-label" for="rt-question" data-i18n="rt.questionLabel">问题 / 议题</label>
+          <div class="geo-sub-head">
+            <label class="field-label" for="rt-question" style="margin: 0" data-i18n="rt.questionLabel">问题 / 议题</label>
+            <button id="rt-clear" class="mini" type="button" data-i18n="img.clear">清除</button>
+          </div>
           <textarea id="rt-question" class="input-box" rows="3" data-i18n-ph="rt.questionPh" placeholder="想让几个模型一起讨论的问题，比如：我这个桌面应用该用 Tauri 还是 Electron？为什么？"></textarea>
 
           <label class="field-label" for="rt-role" style="margin-top: 12px" data-i18n="rt.roleLabel">讨论指令 / 角色（可选，对所有参与者生效）</label>
