@@ -3320,6 +3320,42 @@ function saveHistoryLS() {
 }
 // Open a saved run back in the conversation/result window: switch to its mode and render its
 // transcript into that mode's results box (replacing what's there), then close the history modal.
+// Render one saved card into the current results box: heading + body + copy, and (if we know the
+// model context) the 追问 entry so the conversation can continue from history.
+function renderHistCard(heading: string, text: string, chat?: RtChat) {
+  const copy = document.createElement("button");
+  copy.className = "result-copy mini";
+  copy.textContent = t("btn.copy");
+  const { card, body } = cardShell(heading, { extras: [copy] });
+  body.style.whiteSpace = "pre-wrap";
+  body.textContent = text;
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = t("btn.copied");
+      setTimeout(() => (copy.textContent = t("btn.copy")), 1200);
+    } catch {
+      /* clipboard blocked */
+    }
+  });
+  if (chat) attachFollowup(card, chat, text);
+}
+// Old 圆桌 history was stored as one Markdown blob (before structured cards existed). Parse it back
+// into per-section cards so reopening still shows "谁第几轮说了什么" separately. The model context
+// is lost, so these old cards can't 追问 — only the question + each section's text are recoverable.
+function parseRtMarkdown(md: string): { heading: string; text: string }[] {
+  const parts = md.split(/\n## /); // first chunk = title + 问题; rest = "heading\n\nbody"
+  const out: { heading: string; text: string }[] = [];
+  const q = parts[0].match(/\*\*问题\*\*\s*\n+([\s\S]*?)\s*$/);
+  if (q && q[1].trim()) out.push({ heading: t("rt.questionHeading"), text: q[1].trim() });
+  for (const sec of parts.slice(1)) {
+    const nl = sec.indexOf("\n");
+    const heading = (nl === -1 ? sec : sec.slice(0, nl)).trim();
+    const text = (nl === -1 ? "" : sec.slice(nl + 1)).trim();
+    if (heading) out.push({ heading, text });
+  }
+  return out;
+}
 function loadHistEntry(h: HistEntry) {
   mode = h.mode;
   localStorage.setItem(LS_MODE, mode);
@@ -3327,26 +3363,11 @@ function loadHistEntry(h: HistEntry) {
   activeResultsMode = h.mode;
   modeBox(h.mode).replaceChildren();
   if (h.cards && h.cards.length) {
-    // 圆桌: rebuild each participant/moderator card separately (who said what), with a copy
-    // button and the 追问 entry restored, so reopening behaves like the live room.
-    for (const c of h.cards) {
-      const copy = document.createElement("button");
-      copy.className = "result-copy mini";
-      copy.textContent = t("btn.copy");
-      const { card, body } = cardShell(c.heading, { extras: [copy] });
-      body.style.whiteSpace = "pre-wrap";
-      body.textContent = c.text;
-      copy.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(c.text);
-          copy.textContent = t("btn.copied");
-          setTimeout(() => (copy.textContent = t("btn.copy")), 1200);
-        } catch {
-          /* clipboard blocked */
-        }
-      });
-      if (c.chat) attachFollowup(card, c.chat, c.text);
-    }
+    // 圆桌: rebuild each participant/moderator card separately, with the 追问 entry restored.
+    for (const c of h.cards) renderHistCard(c.heading, c.text, c.chat);
+  } else if (h.mode === "rt") {
+    // Legacy 圆桌 entry (md-only): split the blob back into per-round cards (no 追问 — context gone).
+    for (const c of parseRtMarkdown(h.md)) renderHistCard(c.heading, c.text);
   } else {
     const { body } = cardShell(h.title || (MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode));
     body.style.whiteSpace = "pre-wrap"; // keep the transcript's line breaks
@@ -4776,6 +4797,17 @@ $("#code-new").addEventListener("click", async () => {
   } catch (e) {
     toast(tf("toast.newFolderFailed", { msg: e instanceof Error ? e.message : String(e) }));
   }
+});
+// 新建项目: clear the form back to defaults (the last project is auto-saved to localStorage, so
+// without this every open resumes it). The prior config is still in 📋 历史任务 if needed again.
+$("#code-newproj").addEventListener("click", () => {
+  if (code.dir || code.task || code.role || code.agents.length) {
+    if (!confirm(t("code.newProjConfirm"))) return;
+  }
+  code = { ...DEFAULT_CODE, agents: [] };
+  saveCode();
+  renderCode();
+  toast(t("code.newProjDone"), "info");
 });
 
 // GEO 单篇 form fields
