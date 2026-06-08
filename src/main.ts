@@ -3247,6 +3247,20 @@ let historyViewId: string | null = null;
 function saveHistoryLS() {
   localStorage.setItem(LS_HISTORY, JSON.stringify(history));
 }
+// Open a saved run back in the conversation/result window: switch to its mode and render its
+// transcript into that mode's results box (replacing what's there), then close the history modal.
+function loadHistEntry(h: HistEntry) {
+  mode = h.mode;
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+  activeResultsMode = h.mode;
+  modeBox(h.mode).replaceChildren();
+  const { body } = cardShell(h.title || (MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode));
+  body.style.whiteSpace = "pre-wrap"; // keep the transcript's line breaks
+  body.textContent = h.md;
+  historyModal.classList.add("hidden");
+  scheduleScroll();
+}
 function renderHistory() {
   const listEl = $<HTMLDivElement>("#history-list");
   const viewEl = $<HTMLPreElement>("#history-view");
@@ -3306,6 +3320,14 @@ function renderHistory() {
     const meta = document.createElement("span");
     meta.className = "h-meta";
     meta.textContent = `${MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode} · ${when}`;
+    const copy = document.createElement("button");
+    copy.className = "mini h-del";
+    copy.textContent = "📋";
+    copy.title = t("hist.copy");
+    copy.addEventListener("click", (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(h.md).then(() => toast(t("toast.copiedEntry"), "info"), () => {});
+    });
     const del = document.createElement("button");
     del.className = "danger mini h-del";
     del.textContent = "✕";
@@ -3316,11 +3338,9 @@ function renderHistory() {
       saveHistoryLS();
       renderHistory();
     });
-    item.append(title, meta, del);
-    item.addEventListener("click", () => {
-      historyViewId = h.id;
-      renderHistory();
-    });
+    item.append(title, meta, copy, del);
+    // Click a row → open that run in the conversation window (not just preview).
+    item.addEventListener("click", () => loadHistEntry(h));
     listEl.appendChild(item);
   }
   const cur = history.find((h) => h.id === historyViewId);
