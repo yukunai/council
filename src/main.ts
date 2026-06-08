@@ -623,18 +623,26 @@ function pushCodeTask() {
 const DUTY_SUGGEST = ["实现功能", "审查 + 修 bug", "补测试", "重构 / 优化"];
 
 // ---- 运行历史: every completed run is saved (newest first, capped) so it can be re-read. ----
+// One reconstructable card in a saved 圆桌 run: who said what, plus the chat context so the
+// 追问 button still works after reopening from history (chat omitted = no follow-up, e.g. errors).
+interface HistCard {
+  heading: string;
+  text: string;
+  chat?: RtChat;
+}
 interface HistEntry {
   id: string;
   time: number;
   mode: string; // pipe | geo | rt | code
   title: string;
   md: string;
+  cards?: HistCard[]; // 圆桌: per-participant cards so reopening keeps structure + 追问
 }
 const LS_HISTORY = "council.history";
 let history: HistEntry[] = load(LS_HISTORY, []);
 // Maps a run's mode to its i18n key (resolved via t() at display time in the history list).
 const MODE_LABEL: Record<string, string> = { pipe: "mode.pipe", geo: "mode.geo", rt: "mode.rt", code: "mode.code" };
-function pushHistory(mode: string, title: string, md: string) {
+function pushHistory(mode: string, title: string, md: string, cards?: HistCard[]) {
   if (!md.trim()) return;
   history.unshift({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -642,6 +650,7 @@ function pushHistory(mode: string, title: string, md: string) {
     mode,
     title: title.trim().slice(0, 60) || t("hist.untitled"),
     md,
+    ...(cards && cards.length ? { cards } : {}),
   });
   if (history.length > 50) history.length = 50;
   saveHistoryLS();
@@ -3197,6 +3206,8 @@ async function runRoundtable() {
     const transcript: { label: string; round: number; text: string }[] = [];
     // Cards in display order, read lazily at export time so edits are captured.
     const exportEntries: { heading: string; getText: () => string }[] = [];
+    // Same cards captured structurally for history, so reopening rebuilds them with 追问.
+    const histCards: HistCard[] = [];
     let draft = "";
 
     // Preload each attached skill's body once (its text layers onto that one's system prompt).
@@ -3244,6 +3255,7 @@ async function runRoundtable() {
           draft = res.text;
           transcript.push({ label: workerLabel(worker), round: r, text: res.text });
           exportEntries.push({ heading, getText: res.getText });
+          histCards.push({ heading, text: res.text, chat: { worker, system, label: workerLabel(worker), convo: `问题：${Q}` } });
         }
       }
     }
@@ -3270,7 +3282,14 @@ async function runRoundtable() {
       { worker: rt.moderator, system: modSys, label: t("rt.moderatorHeading"), convo: `问题：${Q}\n\n讨论记录：\n${tx}` },
     );
     if (my !== genId) return;
-    if (modRes) exportEntries.push({ heading: modHeading, getText: modRes.getText });
+    if (modRes) {
+      exportEntries.push({ heading: modHeading, getText: modRes.getText });
+      histCards.push({
+        heading: modHeading,
+        text: modRes.text,
+        chat: { worker: rt.moderator, system: modSys, label: t("rt.moderatorHeading"), convo: `问题：${Q}\n\n讨论记录：\n${tx}` },
+      });
+    }
 
     // Export the whole session (question + every contribution + synthesis) as .md / .txt.
     const buildMarkdown = () => {
@@ -3285,7 +3304,7 @@ async function runRoundtable() {
       return s + "\n";
     };
     makeExportToolbar(t("export.wholeSession"), rt.question.trim() || t("rt.exportTitle"), buildMarkdown, buildText);
-    pushHistory("rt", rt.question.trim() || t("rt.exportTitle"), buildMarkdown());
+    pushHistory("rt", rt.question.trim() || t("rt.exportTitle"), buildMarkdown(), histCards);
   } catch (e) {
     if (my === genId) toast(e instanceof Error ? e.message : String(e));
   } finally {
@@ -3307,9 +3326,32 @@ function loadHistEntry(h: HistEntry) {
   applyMode();
   activeResultsMode = h.mode;
   modeBox(h.mode).replaceChildren();
-  const { body } = cardShell(h.title || (MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode));
-  body.style.whiteSpace = "pre-wrap"; // keep the transcript's line breaks
-  body.textContent = h.md;
+  if (h.cards && h.cards.length) {
+    // 圆桌: rebuild each participant/moderator card separately (who said what), with a copy
+    // button and the 追问 entry restored, so reopening behaves like the live room.
+    for (const c of h.cards) {
+      const copy = document.createElement("button");
+      copy.className = "result-copy mini";
+      copy.textContent = t("btn.copy");
+      const { card, body } = cardShell(c.heading, { extras: [copy] });
+      body.style.whiteSpace = "pre-wrap";
+      body.textContent = c.text;
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(c.text);
+          copy.textContent = t("btn.copied");
+          setTimeout(() => (copy.textContent = t("btn.copy")), 1200);
+        } catch {
+          /* clipboard blocked */
+        }
+      });
+      if (c.chat) attachFollowup(card, c.chat, c.text);
+    }
+  } else {
+    const { body } = cardShell(h.title || (MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode));
+    body.style.whiteSpace = "pre-wrap"; // keep the transcript's line breaks
+    body.textContent = h.md;
+  }
   historyModal.classList.add("hidden");
   scheduleScroll();
 }
