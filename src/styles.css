@@ -1372,3 +1372,15 @@ select:focus {
 .rt-followup textarea {
   flex: 1 1 100%;
 }
+/* 追问入口要显眼：加粗 + 主题色描边/字色，hover 实心反白 */
+.rt-followup > button.mini:not(.primary) {
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: rgba(106, 163, 255, 0.12);
+}
+.rt-followup > button.mini:not(.primary):hover {
+  color: #fff;
+  background: var(--accent-d);
+  border-color: var(--accent-d);
+}
