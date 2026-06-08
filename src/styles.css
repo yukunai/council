@@ -1361,3 +1361,14 @@ select:focus {
   border: 1px solid var(--border);
   margin-top: 8px;
 }
+
+/* 圆桌：单模型追问 */
+.rt-followup {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rt-followup textarea {
+  flex: 1 1 100%;
+}

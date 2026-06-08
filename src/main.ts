@@ -2301,7 +2301,7 @@ function makeGeoResultCard(title: string) {
   const copy = document.createElement("button");
   copy.className = "result-copy mini";
   copy.textContent = t("btn.copy");
-  const { body, setStatus } = cardShell(title, { extras: [copy] });
+  const { card, body, setStatus } = cardShell(title, { extras: [copy] });
 
   let getText = () => body.textContent ?? "";
   copy.addEventListener("click", async () => {
@@ -2337,9 +2337,54 @@ function makeGeoResultCard(title: string) {
       body.textContent = s;
     },
     setStatus,
+    el: card, // the card element, for attaching follow-up UI (圆桌 单模型追问)
     // Current text (edited value once setEditable ran, else streamed text).
     getText: () => getText(),
   };
+}
+
+// Attach a 1-on-1 follow-up chat to a 圆桌 participant's card: ask THAT model directly; its reply
+// becomes a new card that can itself be followed up, forming a continuous thread with one model.
+type RtChat = { worker: string; system: string; label: string; convo: string };
+function attachFollowup(cardEl: HTMLElement, chat: RtChat, answer: string) {
+  const fullConvo = `${chat.convo}\n${chat.label}：${answer}`;
+  const bar = document.createElement("div");
+  bar.className = "rt-followup";
+  const btn = document.createElement("button");
+  btn.className = "mini";
+  btn.textContent = t("rt.askModel");
+  bar.appendChild(btn);
+  cardEl.appendChild(bar);
+  btn.addEventListener("click", () => {
+    btn.remove();
+    const ta = document.createElement("textarea");
+    ta.className = "input-box";
+    ta.rows = 2;
+    ta.placeholder = tf("rt.askPh", { name: chat.label });
+    const send = document.createElement("button");
+    send.className = "primary mini";
+    send.textContent = t("rt.send");
+    bar.append(ta, send);
+    ta.focus();
+    const go = async () => {
+      const msg = ta.value.trim();
+      if (!msg) return;
+      bar.remove(); // the reply card carries the thread forward via its own follow-up
+      const prompt = `${fullConvo}\n\n用户追问：${msg}\n请直接、具体地回答这个追问（保持你之前的立场与上下文，不要复述整篇）。`;
+      await streamCard(
+        genId,
+        `${chat.label} · ${t("rt.followupTag")}`,
+        t("rt.verbReply"),
+        (onD) => runWorker(chat.worker, chat.system, prompt, onD, () => {}),
+        false,
+        { worker: chat.worker, system: chat.system, label: chat.label, convo: `${fullConvo}\n用户追问：${msg}` },
+      );
+    };
+    send.addEventListener("click", () => void go());
+    ta.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void go();
+    });
+  });
 }
 
 // Stream one worker call into its own editable result card. `run(onDelta)` performs the
@@ -2351,6 +2396,7 @@ async function streamCard(
   verb: string,
   run: (onDelta: (t: string) => void) => Promise<void>,
   skippable = false,
+  chat?: RtChat,
 ): Promise<{ text: string; getText: () => string } | null> {
   const card = makeGeoResultCard(title);
   // Headless CLIs (e.g. claude -p) often print nothing until they finish, so a tick of
@@ -2390,6 +2436,7 @@ async function streamCard(
   const text = acc.trim();
   card.setEditable(text);
   card.setStatus("done", tf("sc.chars", { n: cnLen(text) }));
+  if (chat) attachFollowup(card.el, chat, text); // 圆桌: let the user keep chatting with this model
   return { text, getText: card.getText };
 }
 
@@ -3165,8 +3212,8 @@ async function runRoundtable() {
     }
     if (my !== genId) return;
 
-    const contribute = (title: string, worker: string, system: string, prompt: string, verb: string, skippable = false) =>
-      streamCard(my, title, verb, (onDelta) => runWorker(worker, system, prompt, onDelta, () => {}), skippable);
+    const contribute = (title: string, worker: string, system: string, prompt: string, verb: string, skippable = false, chat?: RtChat) =>
+      streamCard(my, title, verb, (onDelta) => runWorker(worker, system, prompt, onDelta, () => {}), skippable, chat);
 
     for (let r = 1; r <= rt.rounds; r++) {
       for (let pi = 0; pi < parts.length; pi++) {
@@ -3188,6 +3235,7 @@ async function runRoundtable() {
           prompt,
           first ? t("rt.verbDraft") : t("rt.verbImprove"),
           true, // skippable: a failed participant is skipped, not fatal
+          { worker, system, label: workerLabel(worker), convo: `问题：${Q}` }, // enable 1-on-1 追问
         );
         if (my !== genId) return; // 「停止」→ 整场中止
         // 出错的这位：卡片已显示报错，跳过它、保留上一份好答案，继续下一位——

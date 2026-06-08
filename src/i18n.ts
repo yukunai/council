@@ -471,6 +471,13 @@ export const ZH: Record<string, string> = {
 
   // ---- 图像 mode: CLI 出真实图 ----
   "img.cliNoImage": "这个 CLI 没能出图（可能它没有图片生成能力）。换成 grok / codex，或选 📷 HTTP 图片源。",
+
+  // ---- 圆桌：单模型追问 ----
+  "rt.askModel": "💬 追问该模型",
+  "rt.askPh": "直接问 {name}（⌘↵ 发送）",
+  "rt.send": "发送",
+  "rt.followupTag": "追问",
+  "rt.verbReply": "回答中",
 };
 
 // Keys whose values contain inline HTML (set via innerHTML, not textContent). Translators must
