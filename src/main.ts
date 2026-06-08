@@ -3258,12 +3258,16 @@ async function runRoundtable() {
       .join("\n\n");
     const modPrompt = `问题：\n${Q}\n\n以下是多个模型多轮接力改进的完整记录：\n\n${tx}\n\n请你作为主持人综述，用 Markdown 分三节：\n## 共识\n大家一致认可的结论。\n## 分歧与演变\n观点如何变化、还有哪些不同看法或未解的问题。\n## 最终建议\n综合各方，给出你认为最好的最终答案。`;
     const modHeading = `${t("rt.moderatorHeading")} · ${workerLabel(rt.moderator)}`;
+    const modSys = "你是这场多模型讨论的主持人，客观中立，善于提炼共识与分歧。";
     const modRes = await contribute(
       modHeading,
       rt.moderator,
-      "你是这场多模型讨论的主持人，客观中立，善于提炼共识与分歧。",
+      modSys,
       modPrompt,
       t("rt.verbSynth"),
+      false,
+      // 总结卡也可追问：上下文带上整场记录，追问主持人本人。
+      { worker: rt.moderator, system: modSys, label: t("rt.moderatorHeading"), convo: `问题：${Q}\n\n讨论记录：\n${tx}` },
     );
     if (my !== genId) return;
     if (modRes) exportEntries.push({ heading: modHeading, getText: modRes.getText });
