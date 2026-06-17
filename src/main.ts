@@ -1264,6 +1264,9 @@ async function runSteps(my: number) {
             const video = document.createElement("video");
             video.className = "result-video";
             video.controls = true;
+            // Hide the player's built-in ⋯→download (it hands the cross-origin URL to an external
+            // app); the ⬇ 下载视频 link below saves in-app via the backend instead.
+            video.setAttribute("controlsList", "nodownload");
             video.src = url;
             // target=_blank / <a download> is a no-op for cross-origin video URLs in the webview,
             // so save through the backend (native dialog + write), same as images.
