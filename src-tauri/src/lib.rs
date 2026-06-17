@@ -987,6 +987,42 @@ async fn export_image(src: String) -> Result<Option<String>, String> {
     Ok(Some(dest))
 }
 
+// Download a generated video (an http(s) video_url) to a user-chosen file. Same reason as
+// export_image: the webview's `<a download>` / target=_blank is a no-op for cross-origin URLs,
+// so the bytes flow through the backend instead. Returns the saved path, or None if cancelled.
+#[tauri::command]
+async fn export_video(src: String) -> Result<Option<String>, String> {
+    let script = "set p to \"\"\ntry\nset p to POSIX path of (choose file name with prompt \"保存视频\" default name \"council-video.mp4\")\nend try\np";
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let dest = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if dest.is_empty() {
+        return Ok(None);
+    }
+    let bytes = if src.starts_with("http://") || src.starts_with("https://") {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .map_err(|e| e.to_string())?;
+        client
+            .get(&src)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .bytes()
+            .await
+            .map_err(|e| e.to_string())?
+            .to_vec()
+    } else {
+        std::fs::read(&src).map_err(|e| e.to_string())?
+    };
+    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+    Ok(Some(dest))
+}
+
 // ---- workflow files: saved as ~/.council/workflows/<name>.json ----
 fn workflows_dir() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -1384,6 +1420,7 @@ pub fn run() {
             pick_folder,
             new_folder,
             export_image,
+            export_video,
             fetch_url,
             image_generate,
             video_generate,

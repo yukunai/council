@@ -198,6 +198,7 @@ export const ZH: Record<string, string> = {
   "card.saveSkill": "存为技能",
   "card.saveSkillTitle": "把这一步的指令固化成可复用技能",
   "video.link": "视频链接（24 小时内有效，记得下载）",
+  "video.download": "⬇ 下载视频",
   "status.queued": "排队中…",
   "status.running": "运行中…",
   "status.stopped": "已停止",

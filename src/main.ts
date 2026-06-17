@@ -1265,11 +1265,21 @@ async function runSteps(my: number) {
             video.className = "result-video";
             video.controls = true;
             video.src = url;
+            // target=_blank / <a download> is a no-op for cross-origin video URLs in the webview,
+            // so save through the backend (native dialog + write), same as images.
             const link = document.createElement("a");
             link.className = "result-link";
-            link.href = url;
-            link.target = "_blank";
-            link.textContent = t("video.link");
+            link.href = "#";
+            link.textContent = t("video.download");
+            link.addEventListener("click", async (e) => {
+              e.preventDefault();
+              try {
+                const saved = await invoke<string | null>("export_video", { src: url });
+                if (saved) toast(tf("img.saved", { path: saved }), "info");
+              } catch (err) {
+                toast(err instanceof Error ? err.message : String(err), "error");
+              }
+            });
             card.body.append(video, link);
             scheduleScroll();
           },

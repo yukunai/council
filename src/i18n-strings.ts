@@ -158,6 +158,7 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "card.saveSkill": "Save as skill",
     "card.saveSkillTitle": "Turn this step's instruction into a reusable skill",
     "video.link": "Video link (valid for 24 hours, remember to download)",
+    "video.download": "⬇ Download video",
     "status.queued": "Queued…",
     "status.running": "Running…",
     "status.stopped": "Stopped",
