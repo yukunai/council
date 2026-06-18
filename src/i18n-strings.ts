@@ -155,6 +155,7 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "sel.noSkill": "(No skill)",
     "card.skillTag": "Skill: {name}",
     "card.untitled": "(Untitled)",
+    "card.thinking": "💭 Reasoning",
     "card.saveSkill": "Save as skill",
     "card.saveSkillTitle": "Turn this step's instruction into a reusable skill",
     "video.link": "Video link (valid for 24 hours, remember to download)",

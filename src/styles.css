@@ -1143,6 +1143,34 @@ select:focus {
 .result-body.error {
   color: var(--err);
 }
+/* 推理模型的「💭 思考过程」：答案上方的灰色可折叠块 */
+.reasoning {
+  margin: 8px 12px 0;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.reasoning > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+.reasoning > summary:hover {
+  color: var(--accent);
+}
+.reasoning-body {
+  padding: 8px 10px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  max-height: 320px;
+  overflow: auto;
+}
 .result-video {
   display: block;
   max-width: 100%;

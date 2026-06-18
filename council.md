@@ -206,3 +206,8 @@
 ### 圆桌历史：旧记录也拆成每条卡 + 任务编排「新建项目」
 - 上个版本只让**新**圆桌历史带每条卡；旧历史(md 一坨)重开仍是一整条。现在 loadHistEntry 对旧 rt 历史 parseRtMarkdown 拆回每段(问题 + 各轮)分卡显示(旧的没上下文不能追问，新的可)。
 - 任务编排加「🆕 新建项目」：之前每次打开都自动恢复上次的目录/任务/Agent(存在 localStorage)。新建项目一键清空回默认(旧配置仍在 📋 历史任务可找回)，有内容时弹确认。
+
+### 推理模型「思考过程」展示 + 千问补型号
+- 后端 chat_stream 新增 Reasoning 事件：解析 delta.reasoning_content(DashScope QwQ/qwen 推理、DeepSeek-R1 等),与答案 content 分流。
+- 前端 runWorker 加 onReasoning 回调；结果卡(流水线 makeResultCard / 圆桌·协作·GEO 的 makeGeoResultCard)上方加灰色可折叠「💭 思考过程」块(reasoningStreamer，body 兄弟节点，setEditable 重置 body 不会清掉)。
+- 千问预设补型号：qwen-max-latest / qwen3-max / qwen-plus-latest / qwen-vl-max(视觉)，并加说明。

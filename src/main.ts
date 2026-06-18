@@ -34,6 +34,7 @@ window.addEventListener("unhandledrejection", (e) => {
 // Mirrors the Rust StreamEvent enum (serde tag = "type", lowercase variants).
 type StreamEvent =
   | { type: "delta"; text: string }
+  | { type: "reasoning"; text: string }
   | { type: "video"; url: string }
   | { type: "usage"; prompt: number; completion: number; cached: number }
   | { type: "done" }
@@ -240,7 +241,9 @@ const PRESETS: Preset[] = [
   {
     name: "千问 阿里百炼",
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    models: "qwen-max\nqwen-plus\nqwen-flash\nqwen-turbo\nqwq-plus",
+    models:
+      "qwen-max-latest\nqwen3-max\nqwen-max\nqwen-plus-latest\nqwen-plus\nqwen-flash\nqwen-turbo\nqwq-plus\nqwen-vl-max",
+    note: "qwq-plus 等推理模型会先流式输出「💭 思考过程」再给答案；qwen-vl-max 为视觉版。",
   },
   {
     name: "Kimi 月之暗面",
@@ -1023,6 +1026,7 @@ function runWorker(
   onVideo: (url: string) => void,
   cwd?: string, // CLI workers only: run the agent inside this project folder
   onUsage?: (u: { prompt: number; completion: number; cached: number }) => void,
+  onReasoning?: (text: string) => void, // reasoning models' chain-of-thought (shown collapsed)
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -1042,6 +1046,7 @@ function runWorker(
     channel.onmessage = (ev) => {
       if (settled) return;
       if (ev.type === "delta") onDelta(ev.text);
+      else if (ev.type === "reasoning") onReasoning?.(ev.text);
       else if (ev.type === "video") onVideo(ev.url);
       else if (ev.type === "usage") onUsage?.(ev);
       else if (ev.type === "done") {
@@ -1130,10 +1135,41 @@ function tokMeta(u: { prompt: number; completion: number; cached: number }): str
   return s;
 }
 
+// Lazily render a reasoning model's streamed chain-of-thought as a collapsible gray box ABOVE the
+// answer body. Returns a stream(text) that appends deltas; the box is created on first non-empty
+// chunk (so non-reasoning models show nothing). Inserted as `body`'s previous sibling, so the card's
+// own body.innerHTML resets (e.g. setEditable) don't wipe it.
+function reasoningStreamer(body: HTMLElement): (text: string) => void {
+  let pre: HTMLElement | null = null;
+  let acc = "";
+  return (text: string) => {
+    if (!text) return;
+    if (!pre) {
+      const det = document.createElement("details");
+      det.className = "reasoning";
+      det.open = true; // expanded while thinking; the user can collapse it
+      const sum = document.createElement("summary");
+      sum.textContent = t("card.thinking");
+      pre = document.createElement("div");
+      pre.className = "reasoning-body";
+      det.append(sum, pre);
+      body.parentElement?.insertBefore(det, body);
+    }
+    acc += text;
+    pre.textContent = acc;
+    scheduleScroll();
+  };
+}
+
 function makeResultCard(
   step: Step,
   n: number,
-): { body: HTMLDivElement; setStatus: (s: string, label: string) => void; setMeta: (txt: string) => void } {
+): {
+  body: HTMLDivElement;
+  setStatus: (s: string, label: string) => void;
+  setMeta: (txt: string) => void;
+  streamReasoning: (text: string) => void;
+} {
   const worker = document.createElement("span");
   worker.className = "result-worker";
   worker.textContent = workerLabel(step.worker) + (step.skill ? ` · ${tf("card.skillTag", { name: step.skill })}` : "");
@@ -1152,7 +1188,7 @@ function makeResultCard(
     extras.push(save);
   }
   const { body, setStatus } = cardShell(`${n}. ${step.title || t("card.untitled")}`, { extras });
-  return { body, setStatus, setMeta: (txt: string) => (meta.textContent = txt) };
+  return { body, setStatus, setMeta: (txt: string) => (meta.textContent = txt), streamReasoning: reasoningStreamer(body) };
 }
 
 async function run() {
@@ -1290,6 +1326,7 @@ async function runSteps(my: number) {
           (u) => {
             usage.v = u;
           },
+          card.streamReasoning,
         );
         textFlush.flush();
         // Stop pressed mid-stream: finalize with the partial output, never fall back.
@@ -2337,11 +2374,13 @@ function makeGeoResultCard(title: string) {
   });
 
   const textFlush = makeTextFlusher(body);
+  const streamReasoning = reasoningStreamer(body);
 
   return {
     streamText: (s: string) => {
       textFlush.stream(s);
     },
+    streamReasoning,
     // Replace streamed text with an editable textarea once generation finishes.
     setEditable: (s: string) => {
       textFlush.cancel();
@@ -2397,7 +2436,7 @@ function attachFollowup(cardEl: HTMLElement, chat: RtChat, answer: string) {
         genId,
         `${chat.label} · ${t("rt.followupTag")}`,
         t("rt.verbReply"),
-        (onD) => runWorker(chat.worker, chat.system, prompt, onD, () => {}),
+        (onD, onR) => runWorker(chat.worker, chat.system, prompt, onD, () => {}, undefined, undefined, onR),
         false,
         { worker: chat.worker, system: chat.system, label: chat.label, convo: `${fullConvo}\n用户追问：${msg}` },
       );
@@ -2409,14 +2448,14 @@ function attachFollowup(cardEl: HTMLElement, chat: RtChat, answer: string) {
   });
 }
 
-// Stream one worker call into its own editable result card. `run(onDelta)` performs the
-// actual call. Returns the finished text + a live getText (for export/history), or null
+// Stream one worker call into its own editable result card. `run(onDelta, onReasoning)` performs
+// the actual call. Returns the finished text + a live getText (for export/history), or null
 // if it errored / was stopped. genId-aware. Used by 圆桌 and 协作编程.
 async function streamCard(
   my: number,
   title: string,
   verb: string,
-  run: (onDelta: (t: string) => void) => Promise<void>,
+  run: (onDelta: (t: string) => void, onReasoning: (t: string) => void) => Promise<void>,
   skippable = false,
   chat?: RtChat,
 ): Promise<{ text: string; getText: () => string } | null> {
@@ -2442,7 +2481,7 @@ async function streamCard(
       card.streamText(acc);
       status();
       scheduleScroll();
-    });
+    }, card.streamReasoning);
   } catch (e) {
     clearInterval(timer);
     if (my !== genId) return null;
@@ -2980,6 +3019,9 @@ async function runGeo() {
       () => {
         /* video events don't apply here */
       },
+      undefined,
+      undefined,
+      card!.streamReasoning,
     );
     if (my !== genId) return;
 
@@ -3237,7 +3279,7 @@ async function runRoundtable() {
     if (my !== genId) return;
 
     const contribute = (title: string, worker: string, system: string, prompt: string, verb: string, skippable = false, chat?: RtChat) =>
-      streamCard(my, title, verb, (onDelta) => runWorker(worker, system, prompt, onDelta, () => {}), skippable, chat);
+      streamCard(my, title, verb, (onDelta, onR) => runWorker(worker, system, prompt, onDelta, () => {}, undefined, undefined, onR), skippable, chat);
 
     for (let r = 1; r <= rt.rounds; r++) {
       for (let pi = 0; pi < parts.length; pi++) {

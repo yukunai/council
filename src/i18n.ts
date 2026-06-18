@@ -194,6 +194,7 @@ export const ZH: Record<string, string> = {
   "step.step1": "步骤 1",
   "sel.noSkill": "（不挂技能）",
   "card.skillTag": "技能:{name}",
+  "card.thinking": "💭 思考过程",
   "card.untitled": "(未命名)",
   "card.saveSkill": "存为技能",
   "card.saveSkillTitle": "把这一步的指令固化成可复用技能",

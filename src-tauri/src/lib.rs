@@ -20,6 +20,9 @@ struct ChatMessage {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum StreamEvent {
     Delta { text: String },
+    // Chain-of-thought from reasoning models (DashScope QwQ/qwen reasoning, DeepSeek-R1, …) which
+    // stream it in a separate `delta.reasoning_content` field, ahead of the actual answer `content`.
+    Reasoning { text: String },
     Video { url: String },
     // Token usage from the final stream chunk. `cached` is the prompt portion served from the
     // provider's own context cache (DeepSeek: prompt_cache_hit_tokens; OpenAI: cached_tokens).
@@ -114,7 +117,15 @@ async fn chat_stream(
                 return Ok(());
             }
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                if let Some(t) = v["choices"][0]["delta"]["content"].as_str() {
+                let delta = &v["choices"][0]["delta"];
+                // Reasoning trace (if any) streams before the answer; forward it on its own channel
+                // so the UI can show it collapsed instead of mixing it into the answer text.
+                if let Some(r) = delta["reasoning_content"].as_str() {
+                    if !r.is_empty() {
+                        let _ = on_event.send(StreamEvent::Reasoning { text: r.to_string() });
+                    }
+                }
+                if let Some(t) = delta["content"].as_str() {
                     if !t.is_empty() {
                         let _ = on_event.send(StreamEvent::Delta { text: t.to_string() });
                     }
