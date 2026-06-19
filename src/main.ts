@@ -3268,6 +3268,7 @@ function setHistoryPinned(row: HistoryRow, pinned: boolean) {
     saveHistoryLS();
   }
   renderHistory();
+  renderChatHistory();
 }
 function renderHistoryFilters() {
   const modeWrap = $<HTMLDivElement>("#history-mode-filters");
@@ -3339,14 +3340,8 @@ function parseRtMarkdown(md: string): { heading: string; text: string }[] {
 }
 function loadHistEntry(h: HistEntry) {
   if (h.mode === "chat" && h.chat) {
-    chatStore = JSON.parse(JSON.stringify(h.chat));
-    chatStore.histId = h.id;
-    saveChat();
-    mode = "chat";
-    localStorage.setItem(LS_MODE, mode);
-    applyMode();
+    loadChatEntry(h);
     historyModal.classList.add("hidden");
-    $<HTMLTextAreaElement>("#chat-input").focus();
     return;
   }
   mode = h.mode;
@@ -3439,9 +3434,14 @@ function renderHistory() {
       } else {
         history = history.filter((x) => x.id !== row.entry.id);
         saveHistoryLS();
+        if (chatStore.histId === row.entry.id) {
+          chatStore.histId = undefined;
+          saveChat();
+        }
       }
       if (historyViewId === row.key) historyViewId = null;
       renderHistory();
+      renderChatHistory();
     });
     item.append(del);
     item.addEventListener("click", () => {
@@ -4722,6 +4722,7 @@ function renderTermSkillList() {
 
 // ---- 聊天 mode: 单模型多轮对话（CLI 或 API 都可）。客户端式布局：对话占主区，模型选择 +
 // 输入框在底部，技能仍在左侧栏。----
+const chatHistoryPanel = $<HTMLElement>("#chat-history-panel");
 const chatPanel = $<HTMLElement>("#chat-panel");
 const LS_CHAT = "council.chat";
 interface ChatTurn {
@@ -4740,6 +4741,7 @@ function saveChat() {
   localStorage.setItem(LS_CHAT, JSON.stringify(chatStore));
 }
 let chatStreaming = false;
+let chatHistorySearch = "";
 
 function ensureChatHistoryId() {
   if (!chatStore.histId) chatStore.histId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -4769,6 +4771,116 @@ function saveChatToHistory() {
     chat: JSON.parse(JSON.stringify(chatStore)),
   });
   saveChat();
+  renderChatHistory();
+}
+
+function chatHistoryEntries(): HistEntry[] {
+  return history
+    .filter((h) => h.mode === "chat" && !!h.chat)
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.time - a.time);
+}
+function chatHistoryPreview(h: HistEntry): string {
+  const log = h.chat?.log ?? [];
+  const last = log.length ? log[log.length - 1].text : h.md;
+  return last.trim().replace(/\s+/g, " ").slice(0, 140);
+}
+function matchesChatHistory(h: HistEntry): boolean {
+  const q = chatHistorySearch.trim().toLowerCase();
+  if (!q) return true;
+  const workers = histEntryWorkers(h);
+  const hay = [h.title, h.md, chatHistoryPreview(h), ...workers, ...workers.map(displayWorkerName)].join("\n").toLowerCase();
+  return hay.includes(q);
+}
+function loadChatEntry(h: HistEntry) {
+  if (!h.chat) return;
+  chatStore = JSON.parse(JSON.stringify(h.chat)) as ChatStore;
+  chatStore.histId = h.id;
+  mode = "chat";
+  localStorage.setItem(LS_MODE, mode);
+  saveChat();
+  applyMode();
+  $<HTMLTextAreaElement>("#chat-input").focus();
+}
+function resetChatDraft(showToast = false) {
+  if (chatStreaming && cancelCurrent) cancelCurrent();
+  chatStore.log = [];
+  chatStore.histId = undefined;
+  chatStore.startedAt = undefined;
+  saveChat();
+  $<HTMLTextAreaElement>("#chat-input").value = "";
+  renderChat();
+  if (showToast) toast(t("chat.cleared"), "info");
+  $<HTMLTextAreaElement>("#chat-input").focus();
+}
+function renderChatHistory() {
+  const listEl = $<HTMLDivElement>("#chat-history-list");
+  const searchEl = $<HTMLInputElement>("#chat-history-search");
+  if (searchEl.value !== chatHistorySearch) searchEl.value = chatHistorySearch;
+  listEl.replaceChildren();
+  const all = chatHistoryEntries();
+  const rows = all.filter(matchesChatHistory);
+  if (!all.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-history-empty";
+    empty.textContent = t("chat.histEmpty");
+    listEl.appendChild(empty);
+    return;
+  }
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-history-empty";
+    empty.textContent = t("chat.histNoMatch");
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const h of rows) {
+    const item = document.createElement("div");
+    item.className = "chat-history-item" + (h.id === chatStore.histId ? " active" : "");
+    const workers = histEntryWorkers(h);
+    const title = document.createElement("div");
+    title.className = "chat-history-title";
+    title.textContent = h.title || t("hist.chatTitle");
+    const meta = document.createElement("div");
+    meta.className = "chat-history-meta";
+    meta.textContent = [workerSummary(workers), formatHistTime(h.time), h.id === chatStore.histId ? t("chat.histCurrent") : ""]
+      .filter(Boolean)
+      .join(" · ");
+    const preview = document.createElement("div");
+    preview.className = "chat-history-preview";
+    preview.textContent = chatHistoryPreview(h);
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "mini chat-history-pin" + (h.pinned ? " on" : "");
+    pin.textContent = "📌";
+    pin.title = h.pinned ? t("hist.unpin") : t("hist.pin");
+    pin.addEventListener("click", (e) => {
+      e.stopPropagation();
+      h.pinned = !h.pinned;
+      saveHistoryLS();
+      renderChatHistory();
+      renderHistory();
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger mini chat-history-delete";
+    del.textContent = "✕";
+    del.title = t("chat.deleteHistory");
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      history = history.filter((x) => x.id !== h.id);
+      saveHistoryLS();
+      if (chatStore.histId === h.id) {
+        chatStore.histId = undefined;
+        saveChat();
+      }
+      if (historyViewId === `hist:${h.id}`) historyViewId = null;
+      renderChatHistory();
+      renderHistory();
+    });
+    item.append(title, meta, pin, del, preview);
+    item.addEventListener("click", () => loadChatEntry(h));
+    listEl.appendChild(item);
+  }
 }
 
 // Append one message bubble to the chat results box; returns its text node so the assistant
@@ -4811,6 +4923,7 @@ function renderChat() {
   if (!chatStore.worker) chatStore.worker = sel.value;
   $<HTMLInputElement>("#chat-system").value = chatStore.system;
   renderChatLog();
+  renderChatHistory();
 }
 
 async function sendChat() {
@@ -4899,6 +5012,7 @@ function applyMode() {
   pipeEditor.classList.toggle("hidden", m !== "pipe");
   rtEditor.classList.toggle("hidden", m !== "rt");
   codeEditor.classList.toggle("hidden", m !== "code");
+  chatHistoryPanel.classList.toggle("hidden", !isChat);
   chatPanel.classList.toggle("hidden", !isChat);
   termPanel.classList.toggle("hidden", !isTerm);
   // 终端 / 聊天 take the whole area: hide the results column + its splitter.
@@ -5060,15 +5174,12 @@ $<HTMLTextAreaElement>("#chat-input").addEventListener("keydown", (e) => {
     void sendChat();
   }
 });
-$("#chat-clear").addEventListener("click", () => {
-  if (chatStreaming && cancelCurrent) cancelCurrent();
-  chatStore.log = [];
-  chatStore.histId = undefined;
-  chatStore.startedAt = undefined;
-  saveChat();
-  renderChatLog();
-  toast(t("chat.cleared"), "info");
+$("#chat-new").addEventListener("click", () => resetChatDraft());
+$<HTMLInputElement>("#chat-history-search").addEventListener("input", (e) => {
+  chatHistorySearch = (e.target as HTMLInputElement).value;
+  renderChatHistory();
 });
+$("#chat-clear").addEventListener("click", () => resetChatDraft(true));
 
 // One-click clear for the big text inputs (圆桌问题 / 工作流输入 / GEO 素材).
 $("#rt-clear").addEventListener("click", () => {
@@ -5304,9 +5415,12 @@ $("#history-clear").addEventListener("click", () => {
   history = [];
   codeHist = [];
   historyViewId = null;
+  chatStore.histId = undefined;
   saveHistoryLS();
   saveCodeHist();
+  saveChat();
   renderHistory();
+  renderChatHistory();
 });
 $("#history-copy").addEventListener("click", async () => {
   const cur = historyRows().find((r) => r.key === historyViewId);
