@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build council (Tauri release) and install it into /Applications.
+# Build Council (Tauri release) and install it into /Applications.
 #   npm run release      # full build (tsc + vite + Rust release) then install
 #   npm run reinstall    # install the last build, skipping the ~1min Rust compile
 #
-# Does NOT kill a running council — replacing the bundle is safe; just relaunch
+# Does NOT kill a running Council — replacing the bundle is safe; just relaunch
 # the app afterwards to pick up the new build (avoids interrupting an open session).
 set -euo pipefail
 
@@ -17,8 +17,9 @@ for arg in "$@"; do
   esac
 done
 
-app="src-tauri/target/release/bundle/macos/council.app"
-dest="/Applications/council.app"
+app="src-tauri/target/release/bundle/macos/Council.app"
+dest="/Applications/Council.app"
+old_dest="/Applications/council.app"
 
 if [ "$skip_build" -eq 0 ]; then
   npm run tauri build
@@ -29,8 +30,8 @@ if [ ! -d "$app" ]; then
   exit 1
 fi
 
-rm -rf "$dest"
+rm -rf "$dest" "$old_dest"
 cp -R "$app" "$dest"
 ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$dest/Contents/Info.plist" 2>/dev/null || echo "?")
-echo "installed council $ver → $dest"
-echo "(relaunch council to pick up the new build)"
+echo "installed Council $ver → $dest"
+echo "(relaunch Council to pick up the new build)"

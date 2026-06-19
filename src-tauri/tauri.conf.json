@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "council",
+  "productName": "Council",
   "version": "0.1.24",
   "identifier": "com.seek.council",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "council",
+        "title": "Council",
         "width": 1200,
         "height": 820
       }
