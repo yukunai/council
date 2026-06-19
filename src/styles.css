@@ -1143,6 +1143,51 @@ select:focus {
 .result-body.error {
   color: var(--err);
 }
+/* API/HTTP 协作 Agent 卡片（终端区上方，无 PTY 的主写/审查模型） */
+.http-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 0;
+}
+.http-agents.hidden {
+  display: none;
+}
+.http-agent {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.http-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.http-agent-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.http-agent-head .result-status {
+  margin-left: auto;
+}
+.http-toggle.on {
+  color: var(--accent);
+}
+.http-agent-out {
+  border-top: 1px solid var(--border);
+}
+.http-agent-out > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+.http-agent-out .result-body {
+  max-height: 240px;
+  overflow: auto;
+}
 /* 推理模型的「💭 思考过程」：答案上方的灰色可折叠块 */
 .reasoning {
   margin: 8px 12px 0;

@@ -211,3 +211,9 @@
 - 后端 chat_stream 新增 Reasoning 事件：解析 delta.reasoning_content(DashScope QwQ/qwen 推理、DeepSeek-R1 等),与答案 content 分流。
 - 前端 runWorker 加 onReasoning 回调；结果卡(流水线 makeResultCard / 圆桌·协作·GEO 的 makeGeoResultCard)上方加灰色可折叠「💭 思考过程」块(reasoningStreamer，body 兄弟节点，setEditable 重置 body 不会清掉)。
 - 千问预设补型号：qwen-max-latest / qwen3-max / qwen-plus-latest / qwen-vl-max(视觉)，并加说明。
+
+### 任务编排：API 模型也能当协作 Agent（主写 + 审查）
+- 痛点：任务编排原本只能选本地 agentic CLI(claude/codex/…)，纯 HTTP API 模型(DeepSeek/千问/GLM/Kimi)进不来——它们跑不进 PTY、也不能自己改文件。
+- 做法：给 HTTP 模型做一套**独立于 PTY 的协作子系统**(终端区上方卡片，无终端)：每轮读 TEAM_NOTES.md + 项目代码快照(code_snapshot) → 调 chat API → 主写则按 ===FILE: 路径=== 协议产出整文件、用 write_project_file 安全写回(限项目目录内)；审查则把反馈 append 进 TEAM_NOTES.md。与 CLI Agent 共用 TEAM_NOTES 协作。
+- 角色：第 1 位或职责含「实现」=主写(改文件)，否则=审查(只写 TEAM_NOTES)。各自有巡检间隔；纳入终端「全部停止/开启」+ 每卡 ■/▶。
+- 新增 Rust 命令：read_text_file / append_team_notes / code_snapshot / write_project_file(safe_join 防越界)。codingAgentOptions 增列「💬 厂商·模型（API）」。

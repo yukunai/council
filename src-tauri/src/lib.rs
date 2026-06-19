@@ -721,6 +721,148 @@ fn dir_exists(path: String) -> bool {
     Path::new(&expanded).is_dir()
 }
 
+// ---- HTTP 协作 Agent (API 模型作为主写/审查，无终端) 支持的文件操作 ----
+// These let an HTTP chat model participate in 协作编程: read the shared TEAM_NOTES.md + a snapshot
+// of the project, and (when it's the implementer) write whole files back. All writes are confined
+// to the project dir.
+
+#[tauri::command]
+fn read_text_file(path: String) -> String {
+    std::fs::read_to_string(expand_home_path(&path)).unwrap_or_default()
+}
+
+// Append a block to <dir>/TEAM_NOTES.md (created if missing), so HTTP agents share feedback the
+// same way the CLI agents do.
+#[tauri::command]
+fn append_team_notes(dir: String, text: String) -> Result<(), String> {
+    let path = Path::new(&expand_home_path(&dir)).join("TEAM_NOTES.md");
+    let mut existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    existing.push_str(&text);
+    if !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    std::fs::write(&path, existing).map_err(|e| e.to_string())
+}
+
+// Directories/extensions a code snapshot should never descend into / include — keeps the snapshot
+// small and free of build output, deps and binaries.
+fn snapshot_skip_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | "out"
+            | ".next"
+            | "vendor"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | "coverage"
+            | ".cache"
+            | ".idea"
+            | ".vscode"
+            | ".gstack"
+    )
+}
+fn snapshot_skip_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    const BIN_EXT: &[&str] = &[
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar", ".mp4",
+        ".mov", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".lock", ".dmg", ".so",
+        ".dylib", ".a", ".o", ".class", ".wasm", ".bin",
+    ];
+    BIN_EXT.iter().any(|e| lower.ends_with(e))
+}
+fn walk_snapshot(dir: &Path, base: &Path, out: &mut String, budget: &mut usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        if *budget == 0 {
+            return;
+        }
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            if name.starts_with('.') && name != ".github" || snapshot_skip_dir(&name) {
+                continue;
+            }
+            walk_snapshot(&path, base, out, budget);
+        } else {
+            if snapshot_skip_file(&name) {
+                continue;
+            }
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.len() > 80_000 {
+                continue; // skip very large files
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue; // non-UTF8 / binary
+            };
+            let rel = path.strip_prefix(base).unwrap_or(&path).to_string_lossy();
+            let slice: String = content.chars().take(*budget).collect();
+            *budget = budget.saturating_sub(slice.chars().count());
+            out.push_str(&format!("\n===== {rel} =====\n{slice}\n"));
+        }
+    }
+}
+// Concatenate the project's text source files (path-headed) up to a char budget, for feeding an
+// HTTP model enough context to review or edit the code.
+#[tauri::command]
+fn code_snapshot(dir: String, max_chars: usize) -> String {
+    let base = std::path::PathBuf::from(expand_home_path(&dir));
+    let mut out = String::new();
+    let mut budget = max_chars.clamp(2_000, 400_000);
+    walk_snapshot(&base, &base, &mut out, &mut budget);
+    if out.is_empty() {
+        out.push_str("（项目为空或无可读源码文件）");
+    }
+    out
+}
+
+// Reject path components that would escape the project dir; return the safe absolute path.
+fn safe_join(dir: &Path, rel: &str) -> Result<std::path::PathBuf, String> {
+    let rel = rel.trim().trim_start_matches(['/', '\\']);
+    if rel.is_empty() {
+        return Err("空路径".into());
+    }
+    let mut p = dir.to_path_buf();
+    for comp in rel.split(['/', '\\']) {
+        match comp {
+            "" | "." => continue,
+            ".." => return Err(format!("路径越界：{rel}")),
+            c => p.push(c),
+        }
+    }
+    if !p.starts_with(dir) {
+        return Err(format!("路径越界：{rel}"));
+    }
+    Ok(p)
+}
+// Write a whole file inside the project dir (creating parent dirs). Used by the HTTP implementer
+// agent to apply the model's proposed file contents.
+#[tauri::command]
+fn write_project_file(dir: String, rel: String, content: String) -> Result<(), String> {
+    let base = std::path::PathBuf::from(expand_home_path(&dir));
+    if !base.is_dir() {
+        return Err(format!("项目目录不存在：{}", base.display()));
+    }
+    let target = safe_join(&base, &rel)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&target, content).map_err(|e| e.to_string())
+}
+
 // Image-to-file generation via an agentic CLI (grok / codex … have built-in image tools). Runs
 // the CLI in a fresh temp dir with the given args + prompt, waits for it to finish, then returns
 // the image file paths it saved. The frontend converts those paths with convertFileSrc, avoiding
@@ -1425,6 +1567,10 @@ pub fn run() {
             resize_pty,
             close_pty,
             dir_exists,
+            read_text_file,
+            append_team_notes,
+            code_snapshot,
+            write_project_file,
             cli_gen_images,
             cli_gen_image,
             save_clip_image,

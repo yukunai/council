@@ -520,17 +520,19 @@ function clearCodeLoop() {
   codeLoops = [];
   refreshTermToolbar();
 }
-// 一键全部停止 / 全部开启。
+// 一键全部停止 / 全部开启（含无终端的 API 协作 Agent）。
 function stopAllAgentsWork() {
   agentTerms().forEach((t) => stopAgentWork(t));
+  httpAgents.forEach((r) => stopHttpAgent(r));
 }
 function startAllAgentsWork() {
   agentTerms().forEach((t) => startAgentLoop(t));
+  httpAgents.forEach((r) => startHttpAgent(r));
 }
-// Show the 终端 toolbar (全部停止/开启) only when there are 协作编程 agents around.
+// Show the 终端 toolbar (全部停止/开启) only when there are 协作编程 agents around (PTY or API).
 function refreshTermToolbar() {
   const bar = document.getElementById("term-toolbar");
-  if (bar) bar.classList.toggle("hidden", agentTerms().length === 0);
+  if (bar) bar.classList.toggle("hidden", agentTerms().length === 0 && httpAgents.length === 0);
 }
 let code: CodingState = { ...DEFAULT_CODE, ...load(LS_CODE, {}) };
 // How to launch each CLI interactively, seeded with a task prompt, optionally unattended.
@@ -3134,10 +3136,22 @@ function codingAgentOptions(): { value: string; label: string }[] {
       opts.push({ value: `cli::${c.name}`, label: `CLI · ${c.name}` });
     }
   }
+  // API 模型（HTTP）也能当协作 Agent：无终端，靠读项目/写文件 + TEAM_NOTES 参与（见 runHttpAgentCycle）。
+  for (const p of providers) {
+    for (const m of parseModels(p.models)) {
+      opts.push({ value: `m::${p.name}::${m}`, label: `💬 ${p.name} · ${m}（API）` });
+    }
+  }
   return opts;
 }
-// Resolve an agent's worker value to the program to launch (bare name, or a configured CLI).
+// An HTTP/API model agent (no terminal): drives files + TEAM_NOTES over the chat API instead of a PTY.
+function isHttpAgent(worker: string): boolean {
+  return decodeWorker(worker).kind === "http";
+}
+// Resolve a CLI agent's worker value to the program to launch (bare name, or a configured CLI).
+// Returns "" for HTTP agents (they don't launch a program).
 function codingProgram(worker: string): string {
+  if (isHttpAgent(worker)) return "";
   if (worker.startsWith("cli::")) return clis.find((c) => `cli::${c.name}` === worker)?.program ?? "";
   return worker;
 }
@@ -3848,6 +3862,204 @@ function renderCode() {
   validateCodeDir();
 }
 
+// ===== HTTP/API 协作 Agent (无终端) =====
+// An API chat model can't run in a PTY or touch files itself, so it participates by: reading the
+// shared TEAM_NOTES.md + a project code snapshot, calling the chat API, then EITHER writing whole
+// files back (implementer) or appending review feedback to TEAM_NOTES.md (advisor). Each runs on
+// its own interval, shown as a card above the terminal panes, and obeys 停止/开启 (single + 全部).
+interface HttpAgentRun {
+  agent: CodeAgent;
+  label: string;
+  role: string;
+  isImpl: boolean; // implementer → writes files; otherwise advisor → writes TEAM_NOTES only
+  baseSys: string; // conv + task + skills + notes convention, prepended every cycle
+  dir: string;
+  intervalMs: number;
+  timer: number | null;
+  busy: boolean;
+  epoch: number; // bumped on stop so a late-finishing cycle discards its writes
+  els: { card: HTMLElement; status: (s: string, label: string) => void; body: HTMLElement; toggle: HTMLButtonElement };
+}
+let httpAgents: HttpAgentRun[] = [];
+
+// Pull the model's `===FILE: path===\n…\n===ENDFILE===` blocks + trailing `===NOTES===` section.
+function parseFileBlocks(text: string): { files: { path: string; content: string }[]; notes: string } {
+  const files: { path: string; content: string }[] = [];
+  let notes = "";
+  const notesSplit = text.split(/^===\s*NOTES\s*===\s*$/im);
+  const body = notesSplit[0];
+  if (notesSplit.length > 1) notes = notesSplit.slice(1).join("\n").trim();
+  const re = /^===\s*FILE:\s*(.+?)\s*===\s*$([\s\S]*?)^===\s*ENDFILE\s*===\s*$/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    const path = m[1].trim();
+    // Strip an optional ```lang fence the model may wrap the file body in.
+    let content = m[2].replace(/^\s*\n/, "").replace(/\n\s*$/, "");
+    const fence = content.match(/^```[^\n]*\n([\s\S]*?)\n```$/);
+    if (fence) content = fence[1];
+    if (path) files.push({ path, content });
+  }
+  return { files, notes };
+}
+
+function refreshHttpAgentCards() {
+  const wrap = document.getElementById("http-agents");
+  if (wrap) wrap.classList.toggle("hidden", httpAgents.length === 0);
+}
+function clearHttpAgents() {
+  for (const r of httpAgents) {
+    if (r.timer != null) clearInterval(r.timer);
+    r.epoch++;
+  }
+  httpAgents = [];
+  const wrap = document.getElementById("http-agents");
+  if (wrap) wrap.replaceChildren();
+  refreshHttpAgentCards();
+  refreshTermToolbar();
+}
+function httpAgentRunning(r: HttpAgentRun) {
+  return r.timer != null;
+}
+function stopHttpAgent(r: HttpAgentRun) {
+  if (r.timer != null) clearInterval(r.timer);
+  r.timer = null;
+  r.epoch++; // abandon any in-flight cycle's writes
+  r.busy = false;
+  r.els.status("idle", t("http.stopped"));
+  r.els.toggle.textContent = t("http.start");
+  r.els.toggle.className = "mini http-toggle on";
+  refreshTermToolbar();
+}
+function startHttpAgent(r: HttpAgentRun) {
+  if (r.timer != null) return;
+  let lastFire = Date.now() - r.intervalMs; // due immediately
+  r.timer = window.setInterval(() => {
+    if (r.busy) return;
+    if (Date.now() - lastFire < r.intervalMs) return;
+    lastFire = Date.now();
+    void runHttpAgentCycle(r);
+  }, 4000);
+  r.els.status("running", t("http.waiting"));
+  r.els.toggle.textContent = t("http.stop");
+  r.els.toggle.className = "danger mini http-toggle";
+  refreshTermToolbar();
+}
+
+async function runHttpAgentCycle(r: HttpAgentRun) {
+  r.busy = true;
+  const epoch = r.epoch;
+  try {
+    r.els.status("running", t("http.reading"));
+    const notesPath = `${r.dir}/TEAM_NOTES.md`;
+    const teamNotes = await invoke<string>("read_text_file", { path: notesPath }).catch(() => "");
+    const snapshot = await invoke<string>("code_snapshot", { dir: r.dir, maxChars: 40000 }).catch(() => "");
+    if (epoch !== r.epoch) return;
+
+    const protoImpl =
+      "输出协议（务必遵守）：只输出你这一轮要新增/修改的文件，每个文件写成：\n" +
+      "===FILE: 相对路径===\n<这个文件的【完整】新内容>\n===ENDFILE===\n" +
+      "可多个文件。最后可加一段 ===NOTES=== 写给队友的说明/进度。不要输出多余解释、不要用 diff、不要省略未改动部分（要给整文件）。本轮没有要改的就只回 ===NOTES=== 段说明现状/在等什么。";
+    const protoAdvisor =
+      "你没有写文件的权限，只做审查。请针对当前代码和 TEAM_NOTES.md 给出【具体、可执行】的反馈：指明文件、问题、建议怎么改。只输出反馈正文，不要客套。已经在 TEAM_NOTES.md 提过的别重复，只补新问题。";
+
+    const prompt =
+      `${r.baseSys}\n\n` +
+      `【TEAM_NOTES.md 现状】\n${teamNotes.trim() || "（空）"}\n\n` +
+      `【项目代码快照】\n${snapshot}\n\n` +
+      (r.isImpl ? protoImpl : protoAdvisor);
+
+    r.els.status("running", t("http.thinking"));
+    r.els.body.textContent = "";
+    let acc = "";
+    const reasoning = reasoningStreamer(r.els.body);
+    await runWorker(
+      r.agent.worker,
+      "",
+      prompt,
+      (txt) => {
+        acc += txt;
+        r.els.body.textContent = acc;
+        scheduleScroll();
+      },
+      () => {},
+      undefined,
+      undefined,
+      reasoning,
+    );
+    if (epoch !== r.epoch) return; // stopped mid-cycle → discard
+
+    if (r.isImpl) {
+      const { files, notes } = parseFileBlocks(acc);
+      const written: string[] = [];
+      for (const f of files) {
+        try {
+          await invoke("write_project_file", { dir: r.dir, rel: f.path, content: f.content });
+          written.push(f.path);
+        } catch (e) {
+          await invoke("append_team_notes", {
+            dir: r.dir,
+            text: `## [API主写·${r.label}] 写文件失败：${f.path} —— ${e instanceof Error ? e.message : String(e)}`,
+          }).catch(() => {});
+        }
+      }
+      const summary = written.length
+        ? tf("http.wroteN", { n: written.length, files: written.join("、") })
+        : t("http.noChange");
+      await invoke("append_team_notes", {
+        dir: r.dir,
+        text: `## [API主写·${r.label}] ${summary}${notes ? `\n${notes}` : ""}`,
+      }).catch(() => {});
+      r.els.status("done", written.length ? tf("http.wroteShort", { n: written.length }) : t("http.idleOnce"));
+    } else {
+      const review = acc.trim();
+      if (review) {
+        await invoke("append_team_notes", { dir: r.dir, text: `## [审查·${r.label}]\n${review}` }).catch(() => {});
+      }
+      r.els.status("done", t("http.reviewed"));
+    }
+  } catch (e) {
+    if (epoch === r.epoch) r.els.status("error", e instanceof Error ? e.message : String(e));
+  } finally {
+    if (epoch === r.epoch) r.busy = false;
+  }
+}
+
+// Build the card UI for one HTTP agent and push it into #http-agents.
+function addHttpAgentCard(r: HttpAgentRun) {
+  const card = document.createElement("div");
+  card.className = "http-agent";
+  const head = document.createElement("div");
+  head.className = "http-agent-head";
+  const title = document.createElement("span");
+  title.className = "http-agent-title";
+  title.textContent = `💬 ${r.label} · ${r.isImpl ? t("http.roleImpl") : t("http.roleAdvisor")}`;
+  const status = document.createElement("span");
+  status.className = "result-status";
+  const toggle = document.createElement("button");
+  toggle.className = "danger mini http-toggle";
+  toggle.textContent = t("http.stop");
+  toggle.addEventListener("click", () => (httpAgentRunning(r) ? stopHttpAgent(r) : startHttpAgent(r)));
+  head.append(title, status, toggle);
+  const det = document.createElement("details");
+  det.className = "http-agent-out";
+  const sum = document.createElement("summary");
+  sum.textContent = t("http.latest");
+  const body = document.createElement("div");
+  body.className = "result-body";
+  det.append(sum, body);
+  card.append(head, det);
+  document.getElementById("http-agents")?.appendChild(card);
+  r.els = {
+    card,
+    body,
+    toggle,
+    status: (s, label) => {
+      status.className = `result-status ${s}`;
+      status.textContent = label;
+    },
+  };
+}
+
 // 协作编程: give each agent its own LIVE interactive terminal (PTY), side by side, in
 // the same project folder. Seeded with its duty + the task + a TEAM_NOTES.md convention
 // so review/test agents leave feedback the implementer reads. You watch + type follow-ups.
@@ -3855,7 +4067,7 @@ async function runCoding() {
   const dir = code.dir.trim();
   if (!dir) return toast(t("toast.codeFillDir"));
   if (!code.task.trim()) return toast(t("toast.codeFillTask"));
-  const agents = code.agents.filter((a) => codingProgram(a.worker));
+  const agents = code.agents.filter((a) => codingProgram(a.worker) || isHttpAgent(a.worker));
   if (!agents.length) return toast(t("toast.codeNeedAgent"));
   const dirOk = await invoke<boolean>("dir_exists", { path: dir }).catch(() => false);
   if (!dirOk) return toast(tf("toast.codeDirMissing", { dir }));
@@ -3890,15 +4102,53 @@ async function runCoding() {
   applyMode();
   resetPanes();
 
+  let paneIdx = 0; // CLI agents consume panes; HTTP agents don't
   agents.forEach((a, i) => {
-    const program = codingProgram(a.worker);
-    if (!program) return;
     const role = a.duty.trim() || DUTY_SUGGEST[i] || "实现";
     const skillText = agentSkills(a)
       .map((sk) => (bodies[sk] ?? "").trim())
       .filter(Boolean)
       .join("\n\n");
     const isImpl = i === 0 || role.includes("实现");
+
+    // API/HTTP agent: no terminal — drive files/TEAM_NOTES over the chat API on its own loop.
+    if (isHttpAgent(a.worker)) {
+      const w = decodeWorker(a.worker);
+      const label = w.kind === "http" ? `${w.provider} · ${w.model}` : a.worker;
+      const baseSys =
+        `${conv}你是多 Agent 协作小组的一员，负责：${role}。我们共用当前这个项目文件夹。\n\n` +
+        `总任务：\n${task}\n\n` +
+        (skillText ? `${skillText}\n\n` : "") +
+        notes;
+      const ownMins = a.loopMins ?? code.loopMins ?? 2.5;
+      const run: HttpAgentRun = {
+        agent: a,
+        label,
+        role,
+        isImpl,
+        baseSys,
+        dir,
+        intervalMs: Math.max(0.5, ownMins) * 60000,
+        timer: null,
+        busy: false,
+        epoch: 0,
+        els: null as unknown as HttpAgentRun["els"],
+      };
+      httpAgents.push(run);
+      addHttpAgentCard(run);
+      if (code.loop) startHttpAgent(run); // keep cycling
+      else {
+        // One pass, then idle (timer stays null); button reflects the ▶ 开启 state.
+        run.els.status("running", t("http.waiting"));
+        run.els.toggle.textContent = t("http.start");
+        run.els.toggle.className = "mini http-toggle on";
+        void runHttpAgentCycle(run);
+      }
+      return;
+    }
+
+    const program = codingProgram(a.worker);
+    if (!program) return;
     const prompt =
       `${conv}你是多 Agent 协作小组的一员，负责：${role}。我们共用当前这个项目文件夹。\n\n` +
       `总任务：\n${task}\n\n` +
@@ -3910,11 +4160,12 @@ async function runCoding() {
     // One pane per agent (side by side) up to MAX_PANES; extra agents become tabs in the
     // last pane. Each launches the CLI interactively (no -p) seeded with the prompt.
     let pane: Pane;
-    if (i < MAX_PANES) pane = addPane();
+    if (paneIdx < MAX_PANES) pane = addPane();
     else {
       pane = panes[panes.length - 1];
       pane.addTab(dir);
     }
+    paneIdx++;
     const spec = CLI_LAUNCH[program];
     const auto = code.auto && spec ? spec.auto : [];
     // Only auto-confirm the startup dialog when its triggering flag (auto) is on.
@@ -3949,9 +4200,10 @@ async function runCoding() {
     }
   });
 
-  if (code.loop) {
+  refreshHttpAgentCards();
+  if (code.loop || httpAgents.length) {
     refreshTermToolbar();
-    toast(tf("toast.loopStarted", { mins: code.loopMins || 2.5 }), "info");
+    if (code.loop) toast(tf("toast.loopStarted", { mins: code.loopMins || 2.5 }), "info");
   }
 }
 
@@ -4366,6 +4618,7 @@ function addPane(): Pane {
 // one fresh terminal per agent).
 function resetPanes() {
   clearCodeLoop(); // stop any 持续协作 timers from a previous run
+  clearHttpAgents(); // and any API 协作 Agent cards/loops
   panes.forEach((p) => p.tabs.forEach((t) => t.teardown()));
   panes.length = 0;
   activePane = null;
