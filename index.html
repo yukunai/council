@@ -32,7 +32,6 @@
           <button id="mode-code" class="seg-btn" data-i18n="mode.code">任务编排</button>
           <button id="mode-chat" class="seg-btn" data-i18n="mode.chat">聊天</button>
           <button id="mode-term" class="seg-btn active" data-i18n="mode.term">终端</button>
-          <button id="mode-img" class="seg-btn" data-i18n="mode.img">图像</button>
         </span>
         <button id="toggle-skills" data-i18n="nav.skills">技能</button>
         <button id="add-step" data-i18n="nav.addStep">＋ 步骤</button>
@@ -217,61 +216,6 @@
           </div>
         </section>
 
-        <section id="chat-editor" class="editor hidden">
-          <label class="field-label" data-i18n="chat.modelLabel">模型（CLI 或 API 都可）</label>
-          <select id="chat-worker"></select>
-
-          <div class="geo-sub-head" style="margin-top: 12px">
-            <label class="field-label" for="chat-system" style="margin: 0" data-i18n="chat.sysLabel">系统提示（可选）</label>
-            <button id="chat-clear" class="mini" type="button" data-i18n="chat.clear">🗑 清空对话</button>
-          </div>
-          <input id="chat-system" class="input-box" data-i18n-ph="chat.sysPh" placeholder="比如：你是简洁、直接的中文助手" />
-
-          <label class="field-label" for="chat-input" style="margin-top: 12px" data-i18n="chat.inputLabel">消息</label>
-          <textarea id="chat-input" class="input-box" rows="4" data-i18n-ph="chat.inputPh" placeholder="输入消息，⌘↵ 发送"></textarea>
-          <button id="chat-send" class="primary" style="margin-top: 8px" data-i18n="chat.send">发送</button>
-          <div class="ref-hint" data-i18n="chat.hint">单模型多轮对话；CLI 与 API 都支持。每轮会把之前的对话作为上下文一起发给模型。</div>
-        </section>
-
-        <section id="img-editor" class="editor hidden">
-          <div class="geo-sub-head">
-            <label class="field-label" for="img-prompt" style="margin: 0" data-i18n="img.promptLabel">描述 / 提示词</label>
-            <button id="img-clear" class="mini" type="button" data-i18n="img.clear">清除</button>
-          </div>
-          <textarea id="img-prompt" class="input-box" rows="3" data-i18n-ph="img.promptPh" placeholder="想画什么，越具体越好，比如：一只戴墨镜的柴犬，扁平插画风，柔和配色"></textarea>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.sourceLabel">出图来源（HTTP 出实图 / 终端 CLI 出 SVG）</label>
-          <select id="img-source"></select>
-          <div id="img-svg-warn" class="ref-hint hidden" data-i18n="img.svgWarn">⚠️ 此来源是终端 CLI，只出 SVG 线条图、不是真实照片。要真实照片请选 📷 开头的来源（图片模型，需先在「接入」填 API Key）。</div>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.typeLabel">类型</label>
-          <div id="img-types" class="geo-styles"></div>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.styleLabel">风格</label>
-          <div id="img-styles" class="geo-styles"></div>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.skillLabel">技能（可选，叠加到提示词）</label>
-          <select id="img-skill"></select>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.ratioLabel">比例</label>
-          <div id="img-ratios" class="geo-styles"></div>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.countLabel">数量</label>
-          <div id="img-counts" class="geo-styles"></div>
-
-          <label class="field-label" style="margin-top: 12px" data-i18n="img.refLabel">参考图（可选，放一张就变「图生图」；仅 HTTP 出图支持）</label>
-          <div class="step-row">
-            <button id="img-ref-pick" data-i18n="img.refPick">选图片</button>
-            <button id="img-ref-clear" class="danger hidden" data-i18n="img.refClear">清除参考图</button>
-            <input id="img-ref-input" type="file" accept="image/*" class="hidden" />
-          </div>
-          <div id="img-ref-preview"></div>
-
-          <div class="ref-hint" data-i18n="img.refHint">
-            文生图：直接写描述出图。图生图：再放一张参考图，在它基础上改。终端 CLI（codex / grok 等）出的是 SVG 矢量图；HTTP 图片源（如火山 Seedream）出真实位图、且支持图生图。
-          </div>
-        </section>
-
         <section id="term-panel" class="term-panel hidden">
           <div id="term-toolbar" class="term-toolbar hidden">
             <span class="tb-label" data-i18n="term.loopLabel">持续协作</span>
@@ -280,6 +224,21 @@
           </div>
           <div id="http-agents" class="http-agents"></div>
           <div id="panes" class="panes"></div>
+        </section>
+
+        <section id="chat-panel" class="chat-panel hidden">
+          <div id="chat-log" class="chat-log"></div>
+          <div class="chat-dock">
+            <div class="chat-dock-row">
+              <select id="chat-worker" class="chat-worker"></select>
+              <input id="chat-system" class="input-box chat-system" data-i18n-ph="chat.sysPh" placeholder="系统提示（可选），比如：你是简洁、直接的中文助手" />
+              <button id="chat-clear" class="mini" type="button" data-i18n="chat.clear">🗑 清空对话</button>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chat-input" class="input-box" rows="2" data-i18n-ph="chat.inputPh" placeholder="输入消息，⌘↵ 发送"></textarea>
+              <button id="chat-send" class="primary" data-i18n="chat.send">发送</button>
+            </div>
+          </div>
         </section>
 
         <div id="col-splitter" class="splitter" data-i18n-title="term.colSplitterTitle" title="拖动调整左右宽度"></div>

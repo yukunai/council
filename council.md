@@ -221,3 +221,12 @@
 ### 新增「聊天」模式：单模型多轮对话（CLI 或 API）
 - 顶栏加「聊天」mode：选一个模型(CLI 或 API 都可)+ 可选系统提示，左侧输入、右侧气泡对话(你/助手)，流式输出、支持 qwq 思考过程。
 - 多轮：每次把之前的对话作为上下文一起发给模型(CLI/API 统一走 runWorker)；⌘↵ 发送，发送中按钮变「停止」，「🗑 清空对话」一键清。对话存 localStorage(council.chat)跨切换/重启保留。
+
+### 聊天模式改成客户端式布局
+- 对话占满主区，模型选择 + 系统提示 + 输入框 + 发送移到**底部**（像常见聊天客户端），不再挤在左侧编辑栏。
+- 技能仍走左侧「技能」栏：在左边勾选的技能会作为系统上下文叠加到这次聊天（每条消息生效）。
+- 新增 #chat-panel（整区，类似终端面板），对话渲染进 #chat-log，底部 .chat-dock。
+
+### 删除「图像」独立模式
+- 顶栏「图像」tab + #img-editor + 文生图/图生图(renderDraw/runDraw/DrawState/IMG_RATIOS/IMG_TYPES/IMG_STYLES/imageSourceOptions/drawRef 等)全部移除。
+- 保留 GEO 文章配图所依赖的底层能力(generateImage/generateCliImages/makeImageGallery/IMG_CLI_INVOKE/images/IMAGE_PRESETS)与 Rust image_generate/cli_gen_images，不受影响。

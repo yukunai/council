@@ -1143,7 +1143,58 @@ select:focus {
 .result-body.error {
   color: var(--err);
 }
-/* 聊天 mode：对话气泡 */
+/* 聊天 mode：客户端式布局——对话占满，模型+输入框在底部 */
+.chat-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 4px;
+}
+.chat-dock {
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-dock-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-dock .chat-worker {
+  flex: none;
+  max-width: 260px;
+}
+.chat-dock .chat-system {
+  flex: 1;
+  min-width: 0;
+}
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.chat-input-row textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+}
+.chat-input-row button {
+  flex: none;
+  height: 38px;
+}
+.chat-log .empty {
+  padding: 24px 16px;
+}
+/* 对话气泡 */
 .chat-msg {
   margin: 10px 12px;
   max-width: 88%;
