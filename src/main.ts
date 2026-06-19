@@ -367,7 +367,7 @@ if (images.length === 0 && !localStorage.getItem("council.imgseed")) {
 // Default to the terminal (the first screen). LS_MODE is saved on switch but we deliberately
 // do NOT restore it at cold launch — the user always starts on this view.
 let mode: string = "term";
-if (!["pipe", "geo", "rt", "code", "term", "img"].includes(mode)) mode = "term";
+if (!["pipe", "geo", "rt", "code", "term", "img", "chat"].includes(mode)) mode = "term";
 
 // One-time arg fixes for CLIs added before the presets were corrected:
 //  - grok with empty args fails ("unrecognized subcommand") → needs `-p`.
@@ -4751,6 +4751,120 @@ function renderTermSkillList() {
   }
 }
 
+// ---- 聊天 mode: 单模型多轮对话（CLI 或 API 都可）----
+const chatEditor = $<HTMLElement>("#chat-editor");
+const LS_CHAT = "council.chat";
+interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+interface ChatStore {
+  worker: string;
+  system: string;
+  log: ChatTurn[];
+}
+let chatStore: ChatStore = { worker: "", system: "", log: [], ...load<Partial<ChatStore>>(LS_CHAT, {}) };
+function saveChat() {
+  localStorage.setItem(LS_CHAT, JSON.stringify(chatStore));
+}
+let chatStreaming = false;
+
+// Append one message bubble to the chat results box; returns its text node so the assistant
+// reply can stream into it.
+function chatBubble(role: "user" | "assistant", text: string): HTMLElement {
+  const box = modeBox("chat");
+  box.querySelector(".empty")?.remove(); // drop the empty-state hint once a message exists
+  const msg = document.createElement("div");
+  msg.className = `chat-msg ${role}`;
+  const who = document.createElement("div");
+  who.className = "chat-who";
+  who.textContent = role === "user" ? t("chat.you") : t("chat.assistant");
+  const body = document.createElement("div");
+  body.className = "chat-text";
+  body.textContent = text;
+  msg.append(who, body);
+  box.appendChild(msg);
+  scheduleScroll();
+  return body;
+}
+function renderChatLog() {
+  modeBox("chat").replaceChildren();
+  for (const m of chatStore.log) chatBubble(m.role, m.text);
+}
+function renderChat() {
+  const sel = $<HTMLSelectElement>("#chat-worker");
+  const opts = chatWorkerOptions();
+  if (chatStore.worker && !opts.some((o) => o.value === chatStore.worker))
+    opts.push({ value: chatStore.worker, label: tf("worker.invalid", { label: workerLabel(chatStore.worker) }) });
+  fillSelect(sel, opts, chatStore.worker || opts[0]?.value || "");
+  if (!chatStore.worker) chatStore.worker = sel.value;
+  $<HTMLInputElement>("#chat-system").value = chatStore.system;
+  renderChatLog();
+}
+
+async function sendChat() {
+  // While a reply is streaming, the send button acts as 停止.
+  if (chatStreaming) {
+    if (cancelCurrent) cancelCurrent();
+    return;
+  }
+  const input = $<HTMLTextAreaElement>("#chat-input");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!chatStore.worker) return toast(t("chat.needModel"));
+
+  chatStore.log.push({ role: "user", text });
+  saveChat();
+  chatBubble("user", text);
+  input.value = "";
+
+  // Feed prior turns as context + the new user message (works for both CLI and API workers,
+  // which are otherwise single-shot; the model sees the whole conversation each turn).
+  const prior = chatStore.log.slice(0, -1);
+  const histText = prior.length
+    ? "之前的对话：\n" + prior.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.text}`).join("\n") + "\n\n"
+    : "";
+  const prompt = `${histText}用户：${text}\n\n请作为助手，直接回复最后这条消息（不要复述历史）。`;
+
+  const sendBtn = $<HTMLButtonElement>("#chat-send");
+  chatStreaming = true;
+  sendBtn.textContent = t("chat.stop");
+  sendBtn.classList.add("danger");
+  const body = chatBubble("assistant", "");
+  let acc = "";
+  const reasoning = reasoningStreamer(body);
+  try {
+    await runWorker(
+      chatStore.worker,
+      chatStore.system,
+      prompt,
+      (txt) => {
+        acc += txt;
+        body.textContent = acc;
+        scheduleScroll();
+      },
+      () => {},
+      undefined,
+      undefined,
+      reasoning,
+    );
+    const reply = acc.trim();
+    if (reply) {
+      chatStore.log.push({ role: "assistant", text: reply });
+      saveChat();
+    } else {
+      body.textContent = t("chat.empty");
+    }
+  } catch (e) {
+    body.classList.add("error");
+    body.textContent = e instanceof Error ? e.message : String(e);
+  } finally {
+    chatStreaming = false;
+    sendBtn.textContent = t("chat.send");
+    sendBtn.classList.remove("danger");
+  }
+}
+
 function applyMode() {
   const m = mode;
   // Show only the current mode's results box; the others stay in the DOM (hidden) so their content
@@ -4758,11 +4872,13 @@ function applyMode() {
   modeBox(m); // ensure it exists
   resultsEl.querySelectorAll<HTMLElement>(".rbox").forEach((b) => b.classList.toggle("hidden", b.dataset.rmode !== m));
   const isTerm = m === "term";
+  const isChat = m === "chat";
   geoEditor.classList.toggle("hidden", m !== "geo");
   pipeEditor.classList.toggle("hidden", m !== "pipe");
   rtEditor.classList.toggle("hidden", m !== "rt");
   codeEditor.classList.toggle("hidden", m !== "code");
   imgEditor.classList.toggle("hidden", m !== "img");
+  chatEditor.classList.toggle("hidden", !isChat);
   termPanel.classList.toggle("hidden", !isTerm);
   // 终端 mode takes the whole area: hide the results column + its splitter.
   (document.querySelector(".results") as HTMLElement).classList.toggle("hidden", isTerm);
@@ -4774,16 +4890,18 @@ function applyMode() {
   $("#mode-rt").classList.toggle("active", m === "rt");
   $("#mode-code").classList.toggle("active", m === "code");
   $("#mode-term").classList.toggle("active", isTerm);
+  $("#mode-chat").classList.toggle("active", isChat);
   $("#mode-img").classList.toggle("active", m === "img");
-  // 终端 has no run/stop (terminals are live + independent); hide those buttons there.
-  runBtn.classList.toggle("hidden", isTerm);
-  stopBtn.classList.toggle("hidden", isTerm || !running);
+  // 终端 / 聊天 have their own controls (live terminals / 发送按钮); hide the global run/stop there.
+  runBtn.classList.toggle("hidden", isTerm || isChat);
+  stopBtn.classList.toggle("hidden", isTerm || isChat || !running);
   document.getElementById("geo-empty-hint")?.remove();
   renderSkills(); // click behavior + highlight differ per mode
   if (m === "code") renderCode();
   else if (m === "geo") renderGeo();
   else if (m === "rt") renderRt();
   else if (m === "img") renderDraw();
+  else if (isChat) renderChat();
   else if (isTerm) {
     // First entry creates a pane; later entries refit (panes were display:none while away).
     if (!panes.length) addPane();
@@ -4806,6 +4924,7 @@ const EMPTY_HINTS: Record<string, string> = {
   geo: "empty.geo",
   rt: "empty.rt",
   img: "empty.img",
+  chat: "empty.chat",
 };
 
 // ---- wire up ----
@@ -4913,6 +5032,36 @@ $("#mode-img").addEventListener("click", () => {
   mode = "img";
   localStorage.setItem(LS_MODE, mode);
   applyMode();
+});
+$("#mode-chat").addEventListener("click", () => {
+  mode = "chat";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+});
+
+// 聊天 form wiring
+$<HTMLSelectElement>("#chat-worker").addEventListener("change", (e) => {
+  chatStore.worker = (e.target as HTMLSelectElement).value;
+  saveChat();
+});
+$<HTMLInputElement>("#chat-system").addEventListener("input", (e) => {
+  chatStore.system = (e.target as HTMLInputElement).value;
+  saveChat();
+});
+$("#chat-send").addEventListener("click", () => void sendChat());
+$<HTMLTextAreaElement>("#chat-input").addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    void sendChat();
+  }
+});
+$("#chat-clear").addEventListener("click", () => {
+  if (chatStreaming && cancelCurrent) cancelCurrent();
+  chatStore.log = [];
+  saveChat();
+  renderChatLog();
+  applyMode(); // re-show the empty hint
+  toast(t("chat.cleared"), "info");
 });
 
 // 图像 form fields

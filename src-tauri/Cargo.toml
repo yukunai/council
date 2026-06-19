@@ -1,6 +1,6 @@
 [package]
 name = "council"
-version = "0.1.21"
+version = "0.1.22"
 description = "Lightweight multi-model workflow client — chain text models into a pipeline"
 authors = ["YuKun"]
 license = "MIT"

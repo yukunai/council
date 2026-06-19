@@ -1143,6 +1143,40 @@ select:focus {
 .result-body.error {
   color: var(--err);
 }
+/* 聊天 mode：对话气泡 */
+.chat-msg {
+  margin: 10px 12px;
+  max-width: 88%;
+}
+.chat-msg.user {
+  margin-left: auto;
+}
+.chat-who {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.chat-msg.user .chat-who {
+  text-align: right;
+}
+.chat-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+  line-height: 1.55;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-msg.user .chat-text {
+  background: rgba(106, 163, 255, 0.14);
+  border-color: var(--accent-d);
+}
+.chat-text.error {
+  color: var(--err);
+}
+
 /* API/HTTP 协作 Agent 卡片（终端区上方，无 PTY 的主写/审查模型） */
 .http-agents {
   display: flex;

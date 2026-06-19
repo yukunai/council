@@ -217,3 +217,7 @@
 - 做法：给 HTTP 模型做一套**独立于 PTY 的协作子系统**(终端区上方卡片，无终端)：每轮读 TEAM_NOTES.md + 项目代码快照(code_snapshot) → 调 chat API → 主写则按 ===FILE: 路径=== 协议产出整文件、用 write_project_file 安全写回(限项目目录内)；审查则把反馈 append 进 TEAM_NOTES.md。与 CLI Agent 共用 TEAM_NOTES 协作。
 - 角色：第 1 位或职责含「实现」=主写(改文件)，否则=审查(只写 TEAM_NOTES)。各自有巡检间隔；纳入终端「全部停止/开启」+ 每卡 ■/▶。
 - 新增 Rust 命令：read_text_file / append_team_notes / code_snapshot / write_project_file(safe_join 防越界)。codingAgentOptions 增列「💬 厂商·模型（API）」。
+
+### 新增「聊天」模式：单模型多轮对话（CLI 或 API）
+- 顶栏加「聊天」mode：选一个模型(CLI 或 API 都可)+ 可选系统提示，左侧输入、右侧气泡对话(你/助手)，流式输出、支持 qwq 思考过程。
+- 多轮：每次把之前的对话作为上下文一起发给模型(CLI/API 统一走 runWorker)；⌘↵ 发送，发送中按钮变「停止」，「🗑 清空对话」一键清。对话存 localStorage(council.chat)跨切换/重启保留。

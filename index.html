@@ -30,6 +30,7 @@
           <button id="mode-geo" class="seg-btn" data-i18n="mode.geo">GEO</button>
           <button id="mode-rt" class="seg-btn" data-i18n="mode.rt">圆桌</button>
           <button id="mode-code" class="seg-btn" data-i18n="mode.code">任务编排</button>
+          <button id="mode-chat" class="seg-btn" data-i18n="mode.chat">聊天</button>
           <button id="mode-term" class="seg-btn active" data-i18n="mode.term">终端</button>
           <button id="mode-img" class="seg-btn" data-i18n="mode.img">图像</button>
         </span>
@@ -214,6 +215,22 @@
             （Claude <code>--dangerously-skip-permissions</code>、Codex <code>--dangerously-bypass-approvals-and-sandbox</code>、Gemini <code>--yolo</code>、Grok <code>--always-approve</code>、Cursor <code>--force</code>）——
             ⚠️ 它会不经询问改文件 / 跑命令，<strong>务必先用 git 管好该项目</strong>以便回滚。
           </div>
+        </section>
+
+        <section id="chat-editor" class="editor hidden">
+          <label class="field-label" data-i18n="chat.modelLabel">模型（CLI 或 API 都可）</label>
+          <select id="chat-worker"></select>
+
+          <div class="geo-sub-head" style="margin-top: 12px">
+            <label class="field-label" for="chat-system" style="margin: 0" data-i18n="chat.sysLabel">系统提示（可选）</label>
+            <button id="chat-clear" class="mini" type="button" data-i18n="chat.clear">🗑 清空对话</button>
+          </div>
+          <input id="chat-system" class="input-box" data-i18n-ph="chat.sysPh" placeholder="比如：你是简洁、直接的中文助手" />
+
+          <label class="field-label" for="chat-input" style="margin-top: 12px" data-i18n="chat.inputLabel">消息</label>
+          <textarea id="chat-input" class="input-box" rows="4" data-i18n-ph="chat.inputPh" placeholder="输入消息，⌘↵ 发送"></textarea>
+          <button id="chat-send" class="primary" style="margin-top: 8px" data-i18n="chat.send">发送</button>
+          <div class="ref-hint" data-i18n="chat.hint">单模型多轮对话；CLI 与 API 都支持。每轮会把之前的对话作为上下文一起发给模型。</div>
         </section>
 
         <section id="img-editor" class="editor hidden">
