@@ -44,6 +44,8 @@ export const ZH: Record<string, string> = {
   "chat.hint": "单模型多轮对话；CLI 与 API 都支持。每轮会把之前的对话作为上下文一起发给模型。",
   "chat.you": "你",
   "chat.assistant": "助手",
+  "chat.copyReply": "复制回复原文",
+  "chat.copiedReply": "已复制回复",
   "chat.needModel": "先选一个模型",
   "chat.empty": "（没有返回内容）",
   "chat.cleared": "已清空对话",

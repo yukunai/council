@@ -160,12 +160,13 @@ const DEFAULT_GEO: GeoState = {
 
 const LS_IMAGES = "council.images";
 const DEFAULT_IMAGES: ImageProvider[] = [];
+const SEEDREAM_MODELS = "doubao-seedream-5-0-260128\ndoubao-seedream-5-0-lite-260128\ndoubao-seedream-4-0-250828";
 const IMAGE_PRESETS: ImageProvider[] = [
   {
     name: "火山 即梦/Seedream 文生图",
     endpoint: "https://ark.cn-beijing.volces.com/api/v3/images/generations",
     key: "",
-    models: "doubao-seedream-4-0-250828",
+    models: SEEDREAM_MODELS,
     size: "1024x1024",
   },
 ];
@@ -179,13 +180,14 @@ const DEFAULT_PROVIDERS: Provider[] = [
     name: "DeepSeek",
     endpoint: "https://api.deepseek.com/chat/completions",
     key: "",
-    models: "deepseek-v4-pro\ndeepseek-v4-flash\ndeepseek-chat\ndeepseek-reasoner",
+    models: "deepseek-v4-pro\ndeepseek-v4-flash",
   },
 ];
 
 const DEFAULT_CLIS: Cli[] = [{ name: "Claude Code", program: "claude", args: "-p" }];
 
 const DEFAULT_VIDEOS: VideoProvider[] = [];
+const SEEDANCE_MODELS = "doubao-seedance-2-0-260128\ndoubao-seedance-2-0-fast-260128";
 
 // Video presets for the market.
 const VIDEO_PRESETS: VideoProvider[] = [
@@ -193,7 +195,7 @@ const VIDEO_PRESETS: VideoProvider[] = [
     name: "火山 即梦 / Seedance",
     endpoint: "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
     key: "",
-    models: "doubao-seedance-2-0-260128",
+    models: SEEDANCE_MODELS,
     resolution: "1080p",
     ratio: "16:9",
     duration: "5",
@@ -215,8 +217,8 @@ const DEFAULT_STEPS: Step[] = [
   },
 ];
 
-// 模型市场预设。DeepSeek/Kimi/千问/Gemini/GLM/Mistral/xAI 的端点是 2026-05 查官方文档得到的；
-// OpenAI 用已知模型名（文档页要登录）；火山端点固定但豆包模型名按账号调；MiniMax 端点留空待确认。
+// 模型市场预设。2026-06 按官方文档更新；只负责给用户“一键添加”的起点，
+// 添加后仍可在「厂商 / 命令 / Key」里继续改 endpoint 和模型名。
 // 模型名随厂商更新会变，添加后都能在「厂商 / 命令 / Key」里改。
 interface Preset {
   name: string;
@@ -229,63 +231,64 @@ const PRESETS: Preset[] = [
   {
     name: "DeepSeek",
     endpoint: "https://api.deepseek.com/chat/completions",
-    models: "deepseek-v4-pro\ndeepseek-v4-flash\ndeepseek-chat\ndeepseek-reasoner",
+    models: "deepseek-v4-pro\ndeepseek-v4-flash",
+    note: "deepseek-chat / deepseek-reasoner 将于 2026-07-24 下线；新建请用 v4-pro / v4-flash。",
   },
   {
     name: "OpenAI (GPT)",
     endpoint: "https://api.openai.com/v1/chat/completions",
-    models: "gpt-4o\ngpt-4o-mini\ngpt-4.1\ngpt-4.1-mini\no3\no4-mini",
+    models: "gpt-5.5\ngpt-5.4\ngpt-5.4-mini\ngpt-5.4-nano",
   },
   {
     name: "Gemini",
     endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    models: "gemini-3.5-flash\ngemini-3.1-pro\ngemini-3.5-flash-lite\ngemini-2.5-flash",
+    models: "gemini-3.5-flash\ngemini-3.1-pro-preview\ngemini-3.1-flash-lite\ngemini-2.5-pro\ngemini-2.5-flash",
   },
   {
     name: "千问 阿里百炼",
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     models:
-      "qwen-max-latest\nqwen3-max\nqwen-max\nqwen-plus-latest\nqwen-plus\nqwen-flash\nqwen-turbo\nqwq-plus\nqwen-vl-max",
-    note: "qwq-plus 等推理模型会先流式输出「💭 思考过程」再给答案；qwen-vl-max 为视觉版。",
+      "qwen3-max\nqwen3.5-plus\nqwen3.5-flash\nqwen3-coder-plus\nqwen-plus-latest\nqwen-flash\nqwen-turbo\nqwq-plus\nqwen-vl-max-latest",
+    note: "qwq-plus 等推理模型会先流式输出「💭 思考过程」再给答案；qwen-vl-max-latest 为视觉版。",
   },
   {
     name: "Kimi 月之暗面",
-    endpoint: "https://api.moonshot.cn/v1/chat/completions",
-    models:
-      "kimi-k2.6\nkimi-k2.5\nkimi-k2-thinking\nmoonshot-v1-128k\nmoonshot-v1-32k\nmoonshot-v1-8k\nmoonshot-v1-auto",
+    endpoint: "https://api.moonshot.ai/v1/chat/completions",
+    models: "kimi-k2.7-code\nkimi-k2.6\nkimi-k2.5\nmoonshot-v1-128k\nmoonshot-v1-32k\nmoonshot-v1-8k",
   },
   {
     name: "GLM 智谱",
-    endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    models: "glm-5.1\nglm-4.7\nglm-4.6v\nglm-4-flash",
+    endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+    models: "glm-5.2\nglm-5.1\nglm-5\nglm-5-turbo\nglm-4.7",
+    note: "智谱 / Z.AI 官方 OpenAI 兼容端点。",
   },
   {
     name: "xAI Grok",
     endpoint: "https://api.x.ai/v1/chat/completions",
-    models: "grok-4.3\ngrok-3",
+    models: "grok-4.3\ngrok-build-0.1",
   },
   {
     name: "Mistral",
     endpoint: "https://api.mistral.ai/v1/chat/completions",
-    models: "mistral-large-latest\nmistral-small-latest",
+    models: "mistral-medium-3-5\nmistral-small-2603\nmistral-large-2512\nmistral-medium-latest\nmistral-small-latest",
   },
   {
     name: "火山方舟 豆包",
     endpoint: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-    models: "doubao-1.5-pro-32k\ndoubao-1.5-pro-256k\ndoubao-1.5-lite-32k",
+    models: "doubao-seed-2-0-pro-260215\ndoubao-seed-2-0-lite-260215\ndoubao-seed-2-0-mini-260215\ndoubao-seed-2-0-code-preview-260215",
     note: "model 处可填模型名，或你在方舟控制台创建的接入点 ID（ep-…）",
   },
   {
     name: "Ollama 本地 (Llama 等)",
     endpoint: "http://localhost:11434/v1/chat/completions",
-    models: "llama3.3\nllama3.1\nqwen2.5\nmistral",
+    models: "qwen3.5\nqwen3\nllama4:scout\ngemma3\nmistral-small3.2",
     note: "本机 Ollama：先 `ollama pull` 模型；Key 随便填个非空值即可。",
   },
   {
     name: "MiniMax",
-    endpoint: "",
-    models: "MiniMax-M2.7\nMiniMax-M2.5\nMiniMax-M2.1",
-    note: "MiniMax 接口与标准 OpenAI 略有差异，请到其文档确认 Endpoint 与模型 ID 后填入。",
+    endpoint: "https://api.minimax.io/v1/chat/completions",
+    models: "MiniMax-M3\nMiniMax-M2.7\nMiniMax-M2.7-highspeed\nMiniMax-M2.5\nMiniMax-M2.1",
+    note: "MiniMax OpenAI 兼容接口支持 Chat Completions；M3 为当前主推模型。",
   },
   {
     name: "Claude（Anthropic）",
@@ -302,6 +305,133 @@ const PRESETS: Preset[] = [
     soon: true,
   },
 ];
+
+interface ProviderPresetRefresh {
+  name: string;
+  endpoint: string;
+  models: string;
+  oldEndpoints?: string[];
+  oldModels: string[];
+}
+
+const PROVIDER_PRESET_REFRESHES: ProviderPresetRefresh[] = [
+  {
+    name: "DeepSeek",
+    endpoint: "https://api.deepseek.com/chat/completions",
+    models: "deepseek-v4-pro\ndeepseek-v4-flash",
+    oldModels: ["deepseek-v4-pro\ndeepseek-v4-flash\ndeepseek-chat\ndeepseek-reasoner", "deepseek-chat\ndeepseek-reasoner"],
+  },
+  {
+    name: "OpenAI (GPT)",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    models: "gpt-5.5\ngpt-5.4\ngpt-5.4-mini\ngpt-5.4-nano",
+    oldModels: ["gpt-4o\ngpt-4o-mini\ngpt-4.1\ngpt-4.1-mini\no3\no4-mini"],
+  },
+  {
+    name: "Gemini",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    models: "gemini-3.5-flash\ngemini-3.1-pro-preview\ngemini-3.1-flash-lite\ngemini-2.5-pro\ngemini-2.5-flash",
+    oldModels: ["gemini-3.5-flash\ngemini-3.1-pro\ngemini-3.5-flash-lite\ngemini-2.5-flash"],
+  },
+  {
+    name: "千问 阿里百炼",
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    models:
+      "qwen3-max\nqwen3.5-plus\nqwen3.5-flash\nqwen3-coder-plus\nqwen-plus-latest\nqwen-flash\nqwen-turbo\nqwq-plus\nqwen-vl-max-latest",
+    oldModels: ["qwen-max-latest\nqwen3-max\nqwen-max\nqwen-plus-latest\nqwen-plus\nqwen-flash\nqwen-turbo\nqwq-plus\nqwen-vl-max"],
+  },
+  {
+    name: "Kimi 月之暗面",
+    endpoint: "https://api.moonshot.ai/v1/chat/completions",
+    models: "kimi-k2.7-code\nkimi-k2.6\nkimi-k2.5\nmoonshot-v1-128k\nmoonshot-v1-32k\nmoonshot-v1-8k",
+    oldEndpoints: ["https://api.moonshot.cn/v1/chat/completions"],
+    oldModels: ["kimi-k2.6\nkimi-k2.5\nkimi-k2-thinking\nmoonshot-v1-128k\nmoonshot-v1-32k\nmoonshot-v1-8k\nmoonshot-v1-auto"],
+  },
+  {
+    name: "GLM 智谱",
+    endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+    models: "glm-5.2\nglm-5.1\nglm-5\nglm-5-turbo\nglm-4.7",
+    oldEndpoints: ["https://open.bigmodel.cn/api/paas/v4/chat/completions"],
+    oldModels: ["glm-5.1\nglm-4.7\nglm-4.6v\nglm-4-flash"],
+  },
+  {
+    name: "xAI Grok",
+    endpoint: "https://api.x.ai/v1/chat/completions",
+    models: "grok-4.3\ngrok-build-0.1",
+    oldModels: ["grok-4.3\ngrok-3"],
+  },
+  {
+    name: "Mistral",
+    endpoint: "https://api.mistral.ai/v1/chat/completions",
+    models: "mistral-medium-3-5\nmistral-small-2603\nmistral-large-2512\nmistral-medium-latest\nmistral-small-latest",
+    oldModels: ["mistral-large-latest\nmistral-small-latest"],
+  },
+  {
+    name: "火山方舟 豆包",
+    endpoint: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    models: "doubao-seed-2-0-pro-260215\ndoubao-seed-2-0-lite-260215\ndoubao-seed-2-0-mini-260215\ndoubao-seed-2-0-code-preview-260215",
+    oldModels: ["doubao-1.5-pro-32k\ndoubao-1.5-pro-256k\ndoubao-1.5-lite-32k"],
+  },
+  {
+    name: "Ollama 本地 (Llama 等)",
+    endpoint: "http://localhost:11434/v1/chat/completions",
+    models: "qwen3.5\nqwen3\nllama4:scout\ngemma3\nmistral-small3.2",
+    oldModels: ["llama3.3\nllama3.1\nqwen2.5\nmistral"],
+  },
+  {
+    name: "MiniMax",
+    endpoint: "https://api.minimax.io/v1/chat/completions",
+    models: "MiniMax-M3\nMiniMax-M2.7\nMiniMax-M2.7-highspeed\nMiniMax-M2.5\nMiniMax-M2.1",
+    oldEndpoints: [""],
+    oldModels: ["MiniMax-M2.7\nMiniMax-M2.5\nMiniMax-M2.1"],
+  },
+];
+
+function normalizeModelsText(models: string): string {
+  return models.replace(/\r\n/g, "\n").trim();
+}
+
+function refreshSeededProviderPresets(list: Provider[]): boolean {
+  let changed = false;
+  for (const provider of list) {
+    const refresh = PROVIDER_PRESET_REFRESHES.find((p) => p.name === provider.name);
+    if (!refresh) continue;
+    const currentModels = normalizeModelsText(provider.models);
+    const shouldRefresh = refresh.oldModels.some((old) => normalizeModelsText(old) === currentModels);
+    if (!shouldRefresh) continue;
+    if (provider.models !== refresh.models) {
+      provider.models = refresh.models;
+      changed = true;
+    }
+    if (refresh.oldEndpoints?.includes(provider.endpoint.trim()) && provider.endpoint !== refresh.endpoint) {
+      provider.endpoint = refresh.endpoint;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function refreshSeededVideoPresets(list: VideoProvider[]): boolean {
+  let changed = false;
+  for (const provider of list) {
+    if (provider.name !== "火山 即梦 / Seedance") continue;
+    if (normalizeModelsText(provider.models) !== "doubao-seedance-2-0-260128") continue;
+    provider.models = SEEDANCE_MODELS;
+    changed = true;
+  }
+  return changed;
+}
+
+function refreshSeededImagePresets(list: ImageProvider[]): boolean {
+  let changed = false;
+  for (const provider of list) {
+    if (provider.name !== "火山 即梦/Seedream 文生图") continue;
+    if (normalizeModelsText(provider.models) !== "doubao-seedream-4-0-250828") continue;
+    provider.models = SEEDREAM_MODELS;
+    changed = true;
+  }
+  return changed;
+}
 
 // 本地 CLI 预设。claude -p 已验证；codex exec / gemini -p 较有把握；grok 参数按你的 CLI 调整。
 const CLI_PRESETS: { name: string; program: string; args: string; note?: string }[] = [
@@ -329,6 +459,8 @@ function load<T>(key: string, fallback: T): T {
 let providers: Provider[] = load(LS_PROVIDERS, DEFAULT_PROVIDERS);
 let clis: Cli[] = load(LS_CLIS, DEFAULT_CLIS);
 let videos: VideoProvider[] = load(LS_VIDEOS, DEFAULT_VIDEOS);
+if (refreshSeededProviderPresets(providers)) localStorage.setItem(LS_PROVIDERS, JSON.stringify(providers));
+if (refreshSeededVideoPresets(videos)) localStorage.setItem(LS_VIDEOS, JSON.stringify(videos));
 let steps: Step[] = load(LS_PIPELINE, DEFAULT_STEPS);
 let skills: SkillInfo[] = [];
 // Skills checked in the left library = "default skills": auto-applied when launching a
@@ -360,6 +492,7 @@ function catLabel(c: string): string {
 // fields like source/material/image) doesn't blow up on access.
 let geo: GeoState = { ...DEFAULT_GEO, ...load(LS_GEO, {}) };
 let images: ImageProvider[] = load(LS_IMAGES, DEFAULT_IMAGES);
+if (refreshSeededImagePresets(images)) localStorage.setItem(LS_IMAGES, JSON.stringify(images));
 // Seed the Seedream image model once, so the 图像 mode always has a 📷 real-photo source to pick
 // (the user still fills its API key). One-time: if they later delete it, the flag stops re-seeding.
 if (images.length === 0 && !localStorage.getItem("council.imgseed")) {
@@ -2923,9 +3056,12 @@ function codingAgentOptions(): { value: string; label: string }[] {
   }
   return opts;
 }
-// An HTTP/API model agent (no terminal): drives files + TEAM_NOTES over the chat API instead of a PTY.
+// An HTTP/API model agent (no terminal): drives files + TEAM_NOTES over the chat API instead of a
+// PTY. Only "m::<provider>::<model>" workers count — NOT bare CLI program names (claude/codex/…),
+// which decodeWorker would otherwise misclassify as http (its catch-all branch) and wrongly route
+// to the API path, so the CLI never launches.
 function isHttpAgent(worker: string): boolean {
-  return decodeWorker(worker).kind === "http";
+  return worker.startsWith("m::");
 }
 // Resolve a CLI agent's worker value to the program to launch (bare name, or a configured CLI).
 // Returns "" for HTTP agents (they don't launch a program).
@@ -4887,18 +5023,43 @@ function renderChatHistory() {
 // Append one message bubble to the chat results box; returns its text node so the assistant
 // reply can stream into it.
 const chatLogEl = () => $<HTMLDivElement>("#chat-log");
-function chatBubble(role: "user" | "assistant", text: string): HTMLElement {
+function chatBubble(role: "user" | "assistant", text: string, opts: { getText?: () => string } = {}): HTMLElement {
   const box = chatLogEl();
   box.querySelector(".empty")?.remove(); // drop the empty-state hint once a message exists
   const msg = document.createElement("div");
   msg.className = `chat-msg ${role}`;
+  const head = document.createElement("div");
+  head.className = "chat-msg-head";
   const who = document.createElement("div");
   who.className = "chat-who";
   who.textContent = role === "user" ? t("chat.you") : t("chat.assistant");
+  head.appendChild(who);
+  if (role === "assistant") {
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "mini chat-copy";
+    copy.textContent = "📋";
+    copy.title = t("chat.copyReply");
+    copy.addEventListener("click", async () => {
+      const raw = opts.getText ? opts.getText() : text;
+      try {
+        await navigator.clipboard.writeText(raw);
+        copy.textContent = "✓";
+        copy.title = t("chat.copiedReply");
+        setTimeout(() => {
+          copy.textContent = "📋";
+          copy.title = t("chat.copyReply");
+        }, 1200);
+      } catch {
+        /* clipboard blocked */
+      }
+    });
+    head.appendChild(copy);
+  }
   const body = document.createElement("div");
   body.className = "chat-text";
   body.textContent = text;
-  msg.append(who, body);
+  msg.append(head, body);
   box.appendChild(msg);
   box.scrollTop = box.scrollHeight;
   return body;
@@ -4955,8 +5116,9 @@ async function sendChat() {
   chatStreaming = true;
   sendBtn.textContent = t("chat.stop");
   sendBtn.classList.add("danger");
-  const body = chatBubble("assistant", "");
   let acc = "";
+  let body!: HTMLElement;
+  body = chatBubble("assistant", "", { getText: () => acc || body.textContent || "" });
   const reasoning = reasoningStreamer(body);
   try {
     // Skills checked in the left sidebar layer onto the system prompt for the chat.

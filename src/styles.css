@@ -1352,13 +1352,35 @@ select:focus {
 .chat-msg.user {
   margin-left: auto;
 }
+.chat-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.chat-msg.user .chat-msg-head {
+  justify-content: flex-end;
+}
 .chat-who {
   font-size: 11px;
   color: var(--muted);
-  margin-bottom: 3px;
 }
 .chat-msg.user .chat-who {
   text-align: right;
+}
+.chat-copy {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.72;
+}
+.chat-msg:not(:hover) .chat-copy {
+  opacity: 0.54;
+}
+.chat-copy:hover {
+  opacity: 1;
 }
 .chat-text {
   white-space: pre-wrap;

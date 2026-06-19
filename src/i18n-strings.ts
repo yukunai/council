@@ -20,6 +20,8 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "chat.hint": "One-on-one multi-turn chat; works with CLI and API models. Each turn sends the prior conversation as context.",
     "chat.you": "You",
     "chat.assistant": "Assistant",
+    "chat.copyReply": "Copy reply exactly",
+    "chat.copiedReply": "Reply copied",
     "chat.needModel": "Pick a model first",
     "chat.empty": "(no content returned)",
     "chat.cleared": "Chat cleared",
