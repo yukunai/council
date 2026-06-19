@@ -62,6 +62,19 @@ export function splitGeo(text: string): { article: string; tweet: string } {
   return { article: text.trim(), tweet: "" };
 }
 
+export function shouldSendChatKey(e: { key: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number }): boolean {
+  return e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229;
+}
+
+export function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
 export function extractSvg(text: string): string {
   const m = text.match(/<svg[\s\S]*?<\/svg>/i);
   return m ? m[0] : "";

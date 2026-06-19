@@ -11,18 +11,8 @@
     <div id="app">
       <div class="toolbar">
         <span class="brand">
-          <svg class="brand-mark" viewBox="0 0 100 100" width="20" height="20" aria-hidden="true">
-            <rect x="6" y="6" width="88" height="88" rx="24" fill="#1b1e26" />
-            <!-- council 'C': five model nodes strung on an amber ring (gap on the right) -->
-            <path d="M66.8 26 A29.3 29.3 0 1 0 66.8 74" fill="none"
-                  stroke="#f6a01a" stroke-width="3.4" stroke-linecap="round" />
-            <circle cx="66.8" cy="26" r="6.5" fill="#bcd9ff" />
-            <circle cx="40" cy="22.5" r="6.5" fill="#9cc6ff" />
-            <circle cx="20.7" cy="50" r="6.5" fill="#6ea8f3" />
-            <circle cx="40" cy="77.5" r="6.5" fill="#5a9bf0" />
-            <circle cx="66.8" cy="74" r="6.5" fill="#4a8cf0" />
-          </svg>
-          council
+          <img class="brand-mark" src="/logo.png" width="20" height="20" alt="" aria-hidden="true" />
+          <span class="brand-name">Council</span>
         </span>
         <span class="tagline" data-i18n="tagline">多模型工作流</span>
         <span class="seg">
@@ -235,7 +225,7 @@
               <button id="chat-clear" class="mini" type="button" data-i18n="chat.clear">🗑 清空对话</button>
             </div>
             <div class="chat-input-row">
-              <textarea id="chat-input" class="input-box" rows="2" data-i18n-ph="chat.inputPh" placeholder="输入消息，⌘↵ 发送"></textarea>
+              <textarea id="chat-input" class="input-box" rows="2" data-i18n-ph="chat.inputPh" placeholder="输入消息，Enter 发送；Shift+Enter 换行"></textarea>
               <button id="chat-send" class="primary" data-i18n="chat.send">发送</button>
             </div>
           </div>
@@ -397,8 +387,13 @@
 
     <div id="history-modal" class="modal hidden">
       <div class="modal-box wide">
-        <div class="modal-title" data-i18n="hist.title">运行历史</div>
-        <p class="modal-note" data-i18n="hist.note">工作流 / 圆桌 / GEO 每次运行完自动存结果；任务编排任务（标「任务编排」）也在这里，点它即填回表单继续。点左侧条目查看 / 加载，可删除。</p>
+        <div class="modal-title" data-i18n="hist.title">历史会话</div>
+        <p class="modal-note" data-i18n="hist.note">工作流 / GEO / 圆桌 / 任务编排 / 聊天 / 终端都会自动存到这里。可按类型、模型或关键词筛选；点条目可恢复或回看，图钉可置顶。</p>
+        <div class="history-controls">
+          <div id="history-mode-filters" class="history-filters"></div>
+          <div id="history-model-filters" class="history-filters"></div>
+          <input id="history-search" class="input-box history-search" data-i18n-ph="hist.searchPh" placeholder="筛选标题 / 内容 / 模型 / 目录..." />
+        </div>
         <div class="history-wrap">
           <div id="history-list" class="history-list"></div>
           <pre id="history-view" class="history-view"></pre>

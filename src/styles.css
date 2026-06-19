@@ -76,6 +76,13 @@ code {
   flex: none;
   display: block;
 }
+.brand-name {
+  display: inline-block;
+  line-height: 1;
+}
+.brand-name::first-letter {
+  font-size: 1.28em;
+}
 .tagline {
   color: var(--muted);
   font-size: 12px;
@@ -893,6 +900,35 @@ select:focus {
   color: var(--muted);
   padding: 20px;
 }
+.history-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.history-filters {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(72px, 1fr);
+  gap: 6px;
+  overflow-x: auto;
+}
+.history-filters button {
+  min-width: 72px;
+  height: 28px;
+  padding: 3px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.history-filters button.active {
+  color: #fff;
+  background: var(--accent-d);
+  border-color: var(--accent);
+}
+.history-search {
+  width: 100%;
+  height: 34px;
+}
 .history-wrap {
   display: flex;
   gap: 12px;
@@ -937,6 +973,14 @@ select:focus {
 }
 .history-item .h-del {
   flex: none;
+}
+.history-item .h-pin {
+  flex: none;
+  color: var(--muted);
+}
+.history-item .h-pin.on {
+  color: var(--accent);
+  border-color: var(--accent-d);
 }
 .history-view {
   flex: 1;
@@ -992,6 +1036,10 @@ select:focus {
 }
 .codehist-item .ch-del {
   flex: none;
+}
+.codehist-item .ch-del.on {
+  color: var(--accent);
+  border-color: var(--accent-d);
 }
 
 .result-copy {

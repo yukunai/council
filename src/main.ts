@@ -12,6 +12,8 @@ import {
   skillBody,
   cnLen,
   splitGeo,
+  shouldSendChatKey,
+  stripAnsi,
   extractSvg,
   sanitizeSvg,
   decodeWorker,
@@ -596,6 +598,7 @@ interface CodeTask {
   auto: boolean;
   loop: boolean;
   loopMins: number;
+  pinned?: boolean;
 }
 const LS_CODE_HIST = "council.codehist";
 let codeHist: CodeTask[] = load(LS_CODE_HIST, []);
@@ -618,6 +621,8 @@ function pushCodeTask() {
     loopMins: code.loopMins,
   };
   // De-dupe: same dir + task replaces the old entry (and floats to the top).
+  const old = codeHist.find((t) => t.dir === snap.dir && t.task === snap.task);
+  snap.pinned = old?.pinned;
   codeHist = codeHist.filter((t) => !(t.dir === snap.dir && t.task === snap.task));
   codeHist.unshift(snap);
   if (codeHist.length > 30) codeHist.length = 30;
@@ -638,27 +643,47 @@ interface HistCard {
 interface HistEntry {
   id: string;
   time: number;
-  mode: string; // pipe | geo | rt | code
+  mode: string; // pipe | geo | rt | code | chat | term
   title: string;
   md: string;
+  workers?: string[];
+  pinned?: boolean;
   cards?: HistCard[]; // 圆桌: per-participant cards so reopening keeps structure + 追问
+  chat?: ChatStore; // 聊天: restore the full multi-turn conversation
 }
 const LS_HISTORY = "council.history";
 let history: HistEntry[] = load(LS_HISTORY, []);
 // Maps a run's mode to its i18n key (resolved via t() at display time in the history list).
-const MODE_LABEL: Record<string, string> = { pipe: "mode.pipe", geo: "mode.geo", rt: "mode.rt", code: "mode.code" };
-function pushHistory(mode: string, title: string, md: string, cards?: HistCard[]) {
+const MODE_LABEL: Record<string, string> = {
+  pipe: "mode.pipe",
+  geo: "mode.geo",
+  rt: "mode.rt",
+  code: "mode.code",
+  chat: "mode.chat",
+  term: "mode.term",
+};
+type HistoryExtra = Pick<HistEntry, "workers" | "cards" | "chat" | "pinned">;
+function upsertHistory(entry: HistEntry) {
+  const old = history.find((h) => h.id === entry.id);
+  history = history.filter((h) => h.id !== entry.id);
+  history.unshift({ ...entry, pinned: entry.pinned ?? old?.pinned });
+  if (history.length > 80) {
+    const pinned = history.filter((h) => h.pinned);
+    const rest = history.filter((h) => !h.pinned).slice(0, Math.max(0, 80 - pinned.length));
+    history = [...pinned, ...rest];
+  }
+  saveHistoryLS();
+}
+function pushHistory(mode: string, title: string, md: string, extra: HistoryExtra = {}) {
   if (!md.trim()) return;
-  history.unshift({
+  upsertHistory({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     time: Date.now(),
     mode,
     title: title.trim().slice(0, 60) || t("hist.untitled"),
     md,
-    ...(cards && cards.length ? { cards } : {}),
+    ...extra,
   });
-  if (history.length > 50) history.length = 50;
-  saveHistoryLS();
 }
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -1426,7 +1451,9 @@ async function runSteps(my: number) {
       `# 流水线\n\n**输入**\n\n${input || "(空)"}\n` +
       steps.map((s, i) => `\n\n## ${i + 1}. ${s.title || "(未命名)"}\n\n${outputs[i] ?? ""}`).join("") +
       (summaryText ? `\n\n---\n\n${summaryText}` : "");
-    pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || t("mode.pipe"), md);
+    pushHistory("pipe", input.slice(0, 40) || steps[0]?.title || t("mode.pipe"), md, {
+      workers: uniq(steps.flatMap((s) => [s.worker, s.fallback ?? ""])),
+    });
   }
 }
 
@@ -2830,7 +2857,7 @@ async function runGeo() {
     };
     const titleHint = geo.title.trim() || article.split("\n")[0].replace(/^#+\s*/, "").trim();
     makeExportToolbar(t("export.wholeArticle"), titleHint, buildMarkdown, buildText);
-    pushHistory("geo", titleHint, buildMarkdown());
+    pushHistory("geo", titleHint, buildMarkdown(), { workers: uniq([geo.worker, geo.image]) });
 
     // Generate an image per marker: HTTP image sources in parallel, local CLI serially
     // (CLI spawns a local process each time). Each slot can be retried on its own.
@@ -3124,7 +3151,10 @@ async function runRoundtable() {
       return s + "\n";
     };
     makeExportToolbar(t("export.wholeSession"), rt.question.trim() || t("rt.exportTitle"), buildMarkdown, buildText);
-    pushHistory("rt", rt.question.trim() || t("rt.exportTitle"), buildMarkdown(), histCards);
+    pushHistory("rt", rt.question.trim() || t("rt.exportTitle"), buildMarkdown(), {
+      cards: histCards,
+      workers: uniq([...parts.map((p) => p.worker), rt.moderator]),
+    });
   } catch (e) {
     if (my === genId) toast(e instanceof Error ? e.message : String(e));
   } finally {
@@ -3135,8 +3165,139 @@ async function runRoundtable() {
 // ---- 运行历史 viewer ----
 const historyModal = $<HTMLDivElement>("#history-modal");
 let historyViewId: string | null = null;
+let histModeFilter = "all";
+let histModelFilter = "all";
+let histSearch = "";
 function saveHistoryLS() {
   localStorage.setItem(LS_HISTORY, JSON.stringify(history));
+}
+const HIST_MODE_FILTERS = ["all", "pipe", "geo", "rt", "code", "chat", "term"];
+const HIST_MODEL_FILTERS = ["all", "Claude", "Codex", "Grok", "Gemini", "Cursor", "API"];
+type HistoryRow = { kind: "hist"; key: string; time: number; pinned: boolean; entry: HistEntry } | { kind: "code"; key: string; time: number; pinned: boolean; task: CodeTask };
+function formatHistTime(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function displayWorkerName(worker: string): string {
+  if (!worker) return "";
+  const c = CODING_CLIS.find((x) => x.program === worker);
+  if (c) return c.label;
+  if (worker.startsWith("cli::") || worker.startsWith("m::") || worker.startsWith("vid::") || worker.startsWith("img::"))
+    return workerLabel(worker);
+  return worker;
+}
+function workerFamily(worker: string): string {
+  const s = `${worker} ${displayWorkerName(worker)}`.toLowerCase();
+  if (s.includes("claude")) return "Claude";
+  if (s.includes("codex")) return "Codex";
+  if (s.includes("grok") || s.includes("x.ai")) return "Grok";
+  if (s.includes("gemini")) return "Gemini";
+  if (s.includes("cursor")) return "Cursor";
+  if (worker.startsWith("m::")) return "API";
+  return "";
+}
+function uniq(xs: string[]): string[] {
+  return [...new Set(xs.filter(Boolean))];
+}
+function histEntryWorkers(h: HistEntry): string[] {
+  return uniq([
+    ...(h.workers ?? []),
+    ...(h.chat?.worker ? [h.chat.worker] : []),
+    ...(h.cards ?? []).map((c) => c.chat?.worker ?? ""),
+  ]);
+}
+function codeTaskWorkers(task: CodeTask): string[] {
+  return uniq(task.agents.map((a) => a.worker));
+}
+function workerSummary(workers: string[]): string {
+  return uniq(workers.map(displayWorkerName)).slice(0, 3).join(" / ");
+}
+function codeTaskMarkdown(task: CodeTask): string {
+  const agents = task.agents
+    .map((a, i) => `${i + 1}. ${displayWorkerName(a.worker)}${a.duty ? ` · ${a.duty}` : ""}`)
+    .join("\n");
+  return [
+    `# ${t("mode.code")}`,
+    "",
+    `- ${t("hist.termDirectory")}：${task.dir || t("ch.noDir")}`,
+    `- Agent：${agents || t("ch.noAgent")}`,
+    "",
+    `## ${t("code.taskLabel")}`,
+    "",
+    task.task || t("hist.untitled"),
+    task.role ? `\n## ${t("code.roleLabel")}\n\n${task.role}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+function historyRowText(row: HistoryRow): string {
+  if (row.kind === "code") return codeTaskMarkdown(row.task);
+  return row.entry.md;
+}
+function historyRowMode(row: HistoryRow): string {
+  return row.kind === "code" ? "code" : row.entry.mode;
+}
+function historyRowWorkers(row: HistoryRow): string[] {
+  return row.kind === "code" ? codeTaskWorkers(row.task) : histEntryWorkers(row.entry);
+}
+function matchesHistoryRow(row: HistoryRow): boolean {
+  const mode = historyRowMode(row);
+  if (histModeFilter !== "all" && mode !== histModeFilter) return false;
+  const workers = historyRowWorkers(row);
+  if (histModelFilter !== "all" && !workers.some((w) => workerFamily(w) === histModelFilter)) return false;
+  const q = histSearch.trim().toLowerCase();
+  if (!q) return true;
+  const title = row.kind === "code" ? row.task.title : row.entry.title;
+  const hay = [title, mode, historyRowText(row), ...workers.map(displayWorkerName), ...workers].join("\n").toLowerCase();
+  return hay.includes(q);
+}
+function historyRows(): HistoryRow[] {
+  return [
+    ...history.map((entry) => ({ kind: "hist" as const, key: `hist:${entry.id}`, time: entry.time, pinned: !!entry.pinned, entry })),
+    ...codeHist.map((task) => ({ kind: "code" as const, key: `code:${task.id}`, time: task.at, pinned: !!task.pinned, task })),
+  ]
+    .filter(matchesHistoryRow)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.time - a.time);
+}
+function setHistoryPinned(row: HistoryRow, pinned: boolean) {
+  if (row.kind === "code") {
+    row.task.pinned = pinned;
+    saveCodeHist();
+  } else {
+    row.entry.pinned = pinned;
+    saveHistoryLS();
+  }
+  renderHistory();
+}
+function renderHistoryFilters() {
+  const modeWrap = $<HTMLDivElement>("#history-mode-filters");
+  const modelWrap = $<HTMLDivElement>("#history-model-filters");
+  const draw = (wrap: HTMLDivElement, items: { value: string; label: string }[], current: string, set: (v: string) => void) => {
+    wrap.innerHTML = "";
+    for (const item of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = item.value === current ? "active" : "";
+      b.textContent = item.label;
+      b.addEventListener("click", () => {
+        set(item.value);
+        renderHistory();
+      });
+      wrap.appendChild(b);
+    }
+  };
+  draw(
+    modeWrap,
+    HIST_MODE_FILTERS.map((m) => ({ value: m, label: m === "all" ? t("hist.filterAll") : t(MODE_LABEL[m] ?? m) })),
+    histModeFilter,
+    (v) => (histModeFilter = v),
+  );
+  draw(
+    modelWrap,
+    HIST_MODEL_FILTERS.map((m) => ({ value: m, label: m === "all" ? t("hist.filterModelsAll") : m === "API" ? t("hist.filterApi") : m })),
+    histModelFilter,
+    (v) => (histModelFilter = v),
+  );
 }
 // Open a saved run back in the conversation/result window: switch to its mode and render its
 // transcript into that mode's results box (replacing what's there), then close the history modal.
@@ -3177,6 +3338,17 @@ function parseRtMarkdown(md: string): { heading: string; text: string }[] {
   return out;
 }
 function loadHistEntry(h: HistEntry) {
+  if (h.mode === "chat" && h.chat) {
+    chatStore = JSON.parse(JSON.stringify(h.chat));
+    chatStore.histId = h.id;
+    saveChat();
+    mode = "chat";
+    localStorage.setItem(LS_MODE, mode);
+    applyMode();
+    historyModal.classList.add("hidden");
+    $<HTMLTextAreaElement>("#chat-input").focus();
+    return;
+  }
   mode = h.mode;
   localStorage.setItem(LS_MODE, mode);
   applyMode();
@@ -3197,38 +3369,13 @@ function loadHistEntry(h: HistEntry) {
   scheduleScroll();
 }
 function renderHistory() {
+  renderHistoryFilters();
   const listEl = $<HTMLDivElement>("#history-list");
   const viewEl = $<HTMLPreElement>("#history-view");
+  const searchEl = $<HTMLInputElement>("#history-search");
+  if (searchEl.value !== histSearch) searchEl.value = histSearch;
   listEl.innerHTML = "";
-  // 协作编程 task snapshots live at the top — clicking one fills the 协作编程 form and jumps there
-  // (they have no markdown result, so they don't use the right-hand viewer).
-  for (const task of codeHist) {
-    const item = document.createElement("div");
-    item.className = "history-item";
-    const d = new Date(task.at);
-    const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    const title = document.createElement("span");
-    title.className = "h-title";
-    title.textContent = task.title;
-    const meta = document.createElement("span");
-    meta.className = "h-meta";
-    meta.textContent = `${t("mode.code")} · ${when}`;
-    const del = document.createElement("button");
-    del.className = "danger mini h-del";
-    del.textContent = "✕";
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();
-      codeHist = codeHist.filter((x) => x.id !== task.id);
-      saveCodeHist();
-      renderHistory();
-    });
-    item.append(title, meta, del);
-    item.addEventListener("click", () => {
-      loadCodeTask(task);
-      historyModal.classList.add("hidden");
-    });
-    listEl.appendChild(item);
-  }
+  const rows = historyRows();
   if (!history.length && !codeHist.length) {
     const empty = document.createElement("div");
     empty.className = "sidebar-note";
@@ -3238,48 +3385,75 @@ function renderHistory() {
     historyViewId = null;
     return;
   }
-  if (!history.length) {
-    viewEl.textContent = t("hist.codeHint");
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "sidebar-note";
+    empty.textContent = t("hist.emptyFiltered");
+    listEl.appendChild(empty);
+    viewEl.textContent = "";
     historyViewId = null;
     return;
   }
-  if (!historyViewId || !history.some((h) => h.id === historyViewId)) historyViewId = history[0].id;
-  for (const h of history) {
+  if (!historyViewId || !rows.some((r) => r.key === historyViewId)) historyViewId = rows[0].key;
+  for (const row of rows) {
     const item = document.createElement("div");
-    item.className = "history-item" + (h.id === historyViewId ? " active" : "");
-    const d = new Date(h.time);
-    const when = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    item.className = "history-item" + (row.key === historyViewId ? " active" : "");
+    const mode = historyRowMode(row);
+    const workers = historyRowWorkers(row);
+    const when = formatHistTime(row.time);
     const title = document.createElement("span");
     title.className = "h-title";
-    title.textContent = h.title;
+    title.textContent = row.kind === "code" ? row.task.title : row.entry.title;
     const meta = document.createElement("span");
     meta.className = "h-meta";
-    meta.textContent = `${MODE_LABEL[h.mode] ? t(MODE_LABEL[h.mode]) : h.mode} · ${when}`;
-    const copy = document.createElement("button");
-    copy.className = "mini h-del";
-    copy.textContent = "📋";
-    copy.title = t("hist.copy");
-    copy.addEventListener("click", (e) => {
+    meta.textContent = [MODE_LABEL[mode] ? t(MODE_LABEL[mode]) : mode, workerSummary(workers), when].filter(Boolean).join(" · ");
+    const pin = document.createElement("button");
+    pin.className = "mini h-pin" + (row.pinned ? " on" : "");
+    pin.textContent = "📌";
+    pin.title = row.pinned ? t("hist.unpin") : t("hist.pin");
+    pin.addEventListener("click", (e) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(h.md).then(() => toast(t("toast.copiedEntry"), "info"), () => {});
+      setHistoryPinned(row, !row.pinned);
     });
+    if (row.kind === "hist") {
+      const copy = document.createElement("button");
+      copy.className = "mini h-del";
+      copy.textContent = "📋";
+      copy.title = t("hist.copy");
+      copy.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(row.entry.md).then(() => toast(t("toast.copiedEntry"), "info"), () => {});
+      });
+      item.append(title, meta, pin, copy);
+    } else {
+      item.append(title, meta, pin);
+    }
     const del = document.createElement("button");
     del.className = "danger mini h-del";
     del.textContent = "✕";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
-      history = history.filter((x) => x.id !== h.id);
-      if (historyViewId === h.id) historyViewId = null;
-      saveHistoryLS();
+      if (row.kind === "code") {
+        codeHist = codeHist.filter((x) => x.id !== row.task.id);
+        saveCodeHist();
+      } else {
+        history = history.filter((x) => x.id !== row.entry.id);
+        saveHistoryLS();
+      }
+      if (historyViewId === row.key) historyViewId = null;
       renderHistory();
     });
-    item.append(title, meta, copy, del);
-    // Click a row → open that run in the conversation window (not just preview).
-    item.addEventListener("click", () => loadHistEntry(h));
+    item.append(del);
+    item.addEventListener("click", () => {
+      historyViewId = row.key;
+      if (row.kind === "code") loadCodeTask(row.task);
+      else loadHistEntry(row.entry);
+      historyModal.classList.add("hidden");
+    });
     listEl.appendChild(item);
   }
-  const cur = history.find((h) => h.id === historyViewId);
-  viewEl.textContent = cur ? cur.md : "";
+  const cur = rows.find((r) => r.key === historyViewId) ?? rows[0];
+  viewEl.textContent = cur ? historyRowText(cur) : "";
 }
 
 // ---- 技能库大窗（按分类浏览 / 搜索 / 管理）----
@@ -4017,6 +4191,10 @@ class Term {
   program = "";
   title = "";
   launched = false; // true once a program has been started (a plain shell counts)
+  private historyId = "";
+  private transcript = "";
+  private savedHistory = false;
+  private decoder = new TextDecoder();
   private unlisten: UnlistenFn | null = null;
   private ro: ResizeObserver | null = null;
   private refitRaf = 0;
@@ -4097,6 +4275,10 @@ class Term {
     this.program = program;
     this.launched = true;
     this.title = `${program || "shell"} · ${shortCwd(cwd) || cwd}`;
+    this.historyId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    this.savedHistory = false;
+    this.decoder = new TextDecoder();
+    this.transcript = `$ ${[program || "shell", ...args].join(" ")}\n# ${t("hist.termDirectory")}: ${cwd}\n\n`;
     this.pane.renderTabs();
 
     // Watch the stream for a startup confirm dialog (claude's "Yes, I accept") and, once
@@ -4107,10 +4289,13 @@ class Term {
     const onData = new Channel<ArrayBuffer>();
     onData.onmessage = (msg) => {
       const bytes = new Uint8Array(msg);
+      const chunk = this.decoder.decode(bytes, { stream: true });
+      this.transcript += chunk;
+      if (this.transcript.length > 140000) this.transcript = this.transcript.slice(-120000);
       this.lastOutputAt = Date.now();
       if (this.term) this.term.write(bytes);
       if (!acceptDone) {
-        acceptBuf = (acceptBuf + new TextDecoder().decode(bytes)).slice(-6000);
+        acceptBuf = (acceptBuf + chunk).slice(-6000);
         // The menu's words get split by cursor-move escapes, so match the contiguous tokens
         // "confirm" (Enter to confirm) + "exit" (1. No, exit) — both present = menu is up.
         if (/confirm/i.test(acceptBuf) && /exit/i.test(acceptBuf)) {
@@ -4122,6 +4307,8 @@ class Term {
     };
     this.unlisten = await listen(`pty:exit:${sid}`, () => {
       term.writeln(`\r\n\x1b[90m[${t("term.processExited")}]\x1b[0m`);
+      this.transcript += `\n[${t("term.processExited")}]\n`;
+      this.saveTerminalHistory();
       if (this.sessionId === sid) {
         this.sessionId = null;
         this.pane.renderTabs();
@@ -4189,6 +4376,36 @@ class Term {
     this.pane.setActiveTerm(this);
   }
 
+  private saveTerminalHistory() {
+    if (!this.launched || this.savedHistory || !this.historyId) return;
+    const tail = this.decoder.decode();
+    if (tail) this.transcript += tail;
+    const body = stripAnsi(this.transcript);
+    if (!body.trim()) return;
+    const title = this.title || t("hist.termTitle");
+    const md = [
+      `# ${t("hist.termTitle")}`,
+      "",
+      `- ${t("hist.termProgram")}：${this.program || "shell"}`,
+      `- ${t("hist.termDirectory")}：${this.cwd || "~"}`,
+      "",
+      `## ${t("hist.termTranscript")}`,
+      "",
+      "```text",
+      body,
+      "```",
+    ].join("\n");
+    upsertHistory({
+      id: this.historyId,
+      time: Date.now(),
+      mode: "term",
+      title,
+      md,
+      workers: [this.program || "shell"],
+    });
+    this.savedHistory = true;
+  }
+
   refit() {
     if (this.refitRaf) return;
     this.refitRaf = requestAnimationFrame(() => {
@@ -4206,6 +4423,7 @@ class Term {
   }
 
   teardown() {
+    this.saveTerminalHistory();
     if (this.refitRaf) cancelAnimationFrame(this.refitRaf);
     this.refitRaf = 0;
     this.ro?.disconnect();
@@ -4514,12 +4732,44 @@ interface ChatStore {
   worker: string;
   system: string;
   log: ChatTurn[];
+  histId?: string;
+  startedAt?: number;
 }
 let chatStore: ChatStore = { worker: "", system: "", log: [], ...load<Partial<ChatStore>>(LS_CHAT, {}) };
 function saveChat() {
   localStorage.setItem(LS_CHAT, JSON.stringify(chatStore));
 }
 let chatStreaming = false;
+
+function ensureChatHistoryId() {
+  if (!chatStore.histId) chatStore.histId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  if (!chatStore.startedAt) chatStore.startedAt = Date.now();
+}
+function buildChatMarkdown(store: ChatStore): string {
+  const head = `${t("hist.chatTitle")} · ${displayWorkerName(store.worker) || t("mode.chat")}`;
+  let md = `# ${head}\n`;
+  if (store.system.trim()) md += `\n**${t("hist.chatSystem")}**\n\n${store.system.trim()}\n`;
+  for (const turn of store.log) {
+    md += `\n\n## ${turn.role === "user" ? t("chat.you") : t("chat.assistant")}\n\n${turn.text.trim()}\n`;
+  }
+  return md.trim() + "\n";
+}
+function saveChatToHistory() {
+  if (!chatStore.log.length) return;
+  ensureChatHistoryId();
+  const firstUser = chatStore.log.find((m) => m.role === "user")?.text.trim();
+  const title = (firstUser || displayWorkerName(chatStore.worker) || t("hist.chatTitle")).split("\n")[0].slice(0, 60);
+  upsertHistory({
+    id: chatStore.histId!,
+    time: Date.now(),
+    mode: "chat",
+    title,
+    md: buildChatMarkdown(chatStore),
+    workers: chatStore.worker ? [chatStore.worker] : [],
+    chat: JSON.parse(JSON.stringify(chatStore)),
+  });
+  saveChat();
+}
 
 // Append one message bubble to the chat results box; returns its text node so the assistant
 // reply can stream into it.
@@ -4623,7 +4873,7 @@ async function sendChat() {
     const reply = acc.trim();
     if (reply) {
       chatStore.log.push({ role: "assistant", text: reply });
-      saveChat();
+      saveChatToHistory();
     } else {
       body.textContent = t("chat.empty");
     }
@@ -4805,7 +5055,7 @@ $<HTMLInputElement>("#chat-system").addEventListener("input", (e) => {
 });
 $("#chat-send").addEventListener("click", () => void sendChat());
 $<HTMLTextAreaElement>("#chat-input").addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+  if (shouldSendChatKey(e)) {
     e.preventDefault();
     void sendChat();
   }
@@ -4813,6 +5063,8 @@ $<HTMLTextAreaElement>("#chat-input").addEventListener("keydown", (e) => {
 $("#chat-clear").addEventListener("click", () => {
   if (chatStreaming && cancelCurrent) cancelCurrent();
   chatStore.log = [];
+  chatStore.histId = undefined;
+  chatStore.startedAt = undefined;
   saveChat();
   renderChatLog();
   toast(t("chat.cleared"), "info");
@@ -5044,17 +5296,23 @@ $("#open-history").addEventListener("click", () => {
   historyModal.classList.remove("hidden");
 });
 $("#history-close").addEventListener("click", () => historyModal.classList.add("hidden"));
+$<HTMLInputElement>("#history-search").addEventListener("input", (e) => {
+  histSearch = (e.target as HTMLInputElement).value;
+  renderHistory();
+});
 $("#history-clear").addEventListener("click", () => {
   history = [];
+  codeHist = [];
   historyViewId = null;
   saveHistoryLS();
+  saveCodeHist();
   renderHistory();
 });
 $("#history-copy").addEventListener("click", async () => {
-  const cur = history.find((h) => h.id === historyViewId);
+  const cur = historyRows().find((r) => r.key === historyViewId);
   if (!cur) return;
   try {
-    await navigator.clipboard.writeText(cur.md);
+    await navigator.clipboard.writeText(historyRowText(cur));
     toast(t("toast.copiedEntry"), "info");
   } catch {
     /* clipboard blocked */
@@ -5092,7 +5350,7 @@ function renderCodeHist() {
     listEl.appendChild(empty);
     return;
   }
-  for (const task of codeHist) {
+  for (const task of [...codeHist].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.at - a.at)) {
     const item = document.createElement("div");
     item.className = "codehist-item";
     const d = new Date(task.at);
@@ -5107,6 +5365,16 @@ function renderCodeHist() {
     const who = task.agents.map((a) => a.worker).join(" · ") || t("ch.noAgent");
     meta.textContent = `${when} · ${shortCwd(task.dir) || task.dir || t("ch.noDir")} · ${who}`;
     main.append(title, meta);
+    const pin = document.createElement("button");
+    pin.className = "mini ch-del" + (task.pinned ? " on" : "");
+    pin.textContent = "📌";
+    pin.title = task.pinned ? t("hist.unpin") : t("hist.pin");
+    pin.addEventListener("click", (e) => {
+      e.stopPropagation();
+      task.pinned = !task.pinned;
+      saveCodeHist();
+      renderCodeHist();
+    });
     const del = document.createElement("button");
     del.className = "danger mini ch-del";
     del.textContent = "✕";
@@ -5116,7 +5384,7 @@ function renderCodeHist() {
       saveCodeHist();
       renderCodeHist();
     });
-    item.append(main, del);
+    item.append(main, pin, del);
     item.addEventListener("click", () => {
       loadCodeTask(task);
       codeHistModal.classList.add("hidden");

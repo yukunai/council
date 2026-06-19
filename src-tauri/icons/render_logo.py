@@ -1,60 +1,100 @@
 #!/usr/bin/env python3
-"""Render the council app icon to a transparent RGBA PNG (no white background).
-'C of nodes': dark rounded square + five blue-gradient dots strung on a THIN
-connecting ring with a gap on the right — the council's C, made of models."""
-from PIL import Image, ImageDraw, ImageFilter
-import numpy as np
-import math
+"""Generate the council app icons from logo-source.png.
 
-S = 2                      # supersample factor for antialiasing
-W = 1024 * S
-def sc(v): return int(round(v * S))
+The source image is already framed at the desired logo scale, so we center-crop
+it to a square before exporting the Tauri/macOS/Windows icon sizes.
+"""
 
-base = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+from __future__ import annotations
 
-# rounded-square background, vertical gradient, clipped to a rounded-rect mask
-margin, rad = sc(64), sc(196)
-mask = Image.new("L", (W, W), 0)
-ImageDraw.Draw(mask).rounded_rectangle([margin, margin, W - margin, W - margin], radius=rad, fill=255)
-top, bot = np.array([42, 48, 64]), np.array([21, 23, 29])
-ys = np.clip((np.arange(W) - margin) / (W - 2 * margin), 0, 1)
-row = (top[None, :] * (1 - ys[:, None]) + bot[None, :] * ys[:, None]).astype(np.uint8)
-grad = np.repeat(row[:, None, :], W, axis=1)
-base.paste(Image.fromarray(grad, "RGB").convert("RGBA"), (0, 0), mask)
+import shutil
+import subprocess
+from pathlib import Path
 
-# shared diagonal accent gradient (light top-left -> accent bottom-right)
-c1, c2 = np.array([188, 217, 255]), np.array([74, 140, 240])
-xx, yy = np.meshgrid(np.arange(W), np.arange(W))
-t = np.clip((xx + yy) / (2 * W), 0, 1)
-cg = (c1[None, None, :] * (1 - t[..., None]) + c2[None, None, :] * t[..., None]).astype(np.uint8)
-accent = Image.fromarray(cg, "RGB").convert("RGBA")
+from PIL import Image
 
-Cx, Cy, R = sc(512), sc(512), sc(300)
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+SOURCE = HERE / "logo-source.png"
+MASTER = HERE / "logo-master.png"
 
-# thin connecting arc (the open ring), gap on the right — warm amber, so the
-# blue dots read as beads strung on an orange wire.
-line_w = sc(24)
-amber = (246, 160, 26, 255)   # #F6A01A
-lmask = Image.new("L", (W, W), 0)
-ImageDraw.Draw(lmask).arc([Cx - R, Cy - R, Cx + R, Cy + R], 55, 305, fill=255, width=line_w)
-base.paste(Image.new("RGBA", (W, W), amber), (0, 0), lmask)
+PNG_SIZES = {
+    "32x32.png": 32,
+    "64x64.png": 64,
+    "128x128.png": 128,
+    "128x128@2x.png": 256,
+    "icon.png": 512,
+    "Square30x30Logo.png": 30,
+    "Square44x44Logo.png": 44,
+    "StoreLogo.png": 50,
+    "Square71x71Logo.png": 71,
+    "Square89x89Logo.png": 89,
+    "Square107x107Logo.png": 107,
+    "Square142x142Logo.png": 142,
+    "Square150x150Logo.png": 150,
+    "Square284x284Logo.png": 284,
+    "Square310x310Logo.png": 310,
+}
 
-# five node dots on the ring
-dot = sc(80)
-angles = [305, 250, 180, 110, 55]   # degrees (PIL: x=cos, y=sin, y down)
-nodes = [(Cx + R * math.cos(math.radians(a)), Cy + R * math.sin(math.radians(a))) for a in angles]
-nmask = Image.new("L", (W, W), 0)
-nd = ImageDraw.Draw(nmask)
-for (nx, ny) in nodes:
-    nd.ellipse([nx - dot, ny - dot, nx + dot, ny + dot], fill=255)
+ICONSET_SIZES = [
+    (16, "icon_16x16.png"),
+    (32, "icon_16x16@2x.png"),
+    (32, "icon_32x32.png"),
+    (64, "icon_32x32@2x.png"),
+    (128, "icon_128x128.png"),
+    (256, "icon_128x128@2x.png"),
+    (256, "icon_256x256.png"),
+    (512, "icon_256x256@2x.png"),
+    (512, "icon_512x512.png"),
+    (1024, "icon_512x512@2x.png"),
+]
 
-# soft glow behind the nodes
-glow = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-glow.paste((106, 163, 255, 150), (0, 0), nmask)
-base.alpha_composite(glow.filter(ImageFilter.GaussianBlur(sc(26))))
 
-# fill the nodes with the accent gradient (on top of the thin ring)
-base.paste(accent, (0, 0), nmask)
+def square_master(size: int = 1024) -> Image.Image:
+    src = Image.open(SOURCE).convert("RGBA")
+    side = min(src.width, src.height)
+    left = (src.width - side) // 2
+    top = (src.height - side) // 2
+    cropped = src.crop((left, top, left + side, top + side))
+    return cropped.resize((size, size), Image.LANCZOS)
 
-base.resize((1024, 1024), Image.LANCZOS).save("logo-master.png")
-print("wrote logo-master.png (C of nodes on a thin ring)")
+
+def save_pngs(master: Image.Image) -> None:
+    master.save(MASTER)
+    for name, size in PNG_SIZES.items():
+        master.resize((size, size), Image.LANCZOS).save(HERE / name)
+    public = ROOT / "public"
+    public.mkdir(exist_ok=True)
+    master.resize((64, 64), Image.LANCZOS).save(public / "logo.png")
+
+
+def save_ico(master: Image.Image) -> None:
+    master.save(
+        HERE / "icon.ico",
+        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
+
+
+def save_icns(master: Image.Image) -> None:
+    iconset = HERE / "icon.iconset"
+    if iconset.exists():
+        shutil.rmtree(iconset)
+    iconset.mkdir()
+    for size, name in ICONSET_SIZES:
+        master.resize((size, size), Image.LANCZOS).save(iconset / name)
+    subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(HERE / "icon.icns")], check=True)
+    shutil.rmtree(iconset)
+
+
+def main() -> None:
+    if not SOURCE.exists():
+        raise SystemExit(f"missing {SOURCE}")
+    master = square_master()
+    save_pngs(master)
+    save_ico(master)
+    save_icns(master)
+    print("generated council icons from logo-source.png")
+
+
+if __name__ == "__main__":
+    main()

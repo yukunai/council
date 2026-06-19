@@ -7,6 +7,8 @@ import {
   skillBody,
   cnLen,
   splitGeo,
+  shouldSendChatKey,
+  stripAnsi,
   extractSvg,
   sanitizeSvg,
   decodeWorker,
@@ -81,6 +83,26 @@ describe("splitGeo", () => {
     const { article, tweet } = splitGeo("只有正文");
     expect(article).toBe("只有正文");
     expect(tweet).toBe("");
+  });
+});
+
+describe("shouldSendChatKey", () => {
+  it("sends on plain Enter", () => {
+    expect(shouldSendChatKey({ key: "Enter" })).toBe(true);
+  });
+  it("keeps Shift+Enter and IME composition from sending", () => {
+    expect(shouldSendChatKey({ key: "Enter", shiftKey: true })).toBe(false);
+    expect(shouldSendChatKey({ key: "Enter", isComposing: true })).toBe(false);
+    expect(shouldSendChatKey({ key: "Enter", keyCode: 229 })).toBe(false);
+  });
+  it("ignores non-Enter keys", () => {
+    expect(shouldSendChatKey({ key: "a" })).toBe(false);
+  });
+});
+
+describe("stripAnsi", () => {
+  it("removes terminal escape sequences and normalizes carriage returns", () => {
+    expect(stripAnsi("\x1b[31mhello\x1b[0m\r\nworld\r")).toBe("hello\nworld");
   });
 });
 
