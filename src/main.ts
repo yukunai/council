@@ -1,5 +1,6 @@
 import { invoke, Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -5059,6 +5060,37 @@ const EMPTY_HINTS: Record<string, string> = {
   img: "empty.img",
 };
 
+function browserCandidateUrl(): string {
+  const geoSource = $<HTMLInputElement>("#geo-source")?.value?.trim();
+  if (geoSource) return geoSource;
+  const chatInput = $<HTMLTextAreaElement>("#chat-input")?.value?.trim();
+  const m = chatInput?.match(/https?:\/\/\S+/);
+  return m?.[0] ?? "";
+}
+
+async function openInternalBrowser(url = browserCandidateUrl()) {
+  const target = url.trim();
+  const existing = await WebviewWindow.getByLabel("council-browser");
+  if (existing) {
+    await existing.show();
+    await existing.setFocus();
+    if (target) await emitTo("council-browser", "browser-open-url", target);
+    return;
+  }
+  const qs = target ? `?url=${encodeURIComponent(target)}` : "";
+  const win = new WebviewWindow("council-browser", {
+    url: `browser.html${qs}`,
+    title: t("browser.title"),
+    width: 980,
+    height: 720,
+    minWidth: 760,
+    minHeight: 520,
+    center: true,
+    focus: true,
+  });
+  win.once("tauri://error", (e) => toast(tf("browser.openFailed", { msg: String(e.payload) })));
+}
+
 // ---- wire up ----
 $("#toggle-skills").addEventListener("click", () => {
   const hidden = skillsPanel.classList.toggle("hidden");
@@ -5401,6 +5433,7 @@ $("#open-market").addEventListener("click", () => {
   marketModal.classList.remove("hidden");
 });
 $("#market-close").addEventListener("click", () => marketModal.classList.add("hidden"));
+$("#open-browser").addEventListener("click", () => void openInternalBrowser());
 
 $("#open-history").addEventListener("click", () => {
   renderHistory();
@@ -5431,6 +5464,16 @@ $("#history-copy").addEventListener("click", async () => {
   } catch {
     /* clipboard blocked */
   }
+});
+void listen<string>("browser-insert-url", (e) => {
+  mode = "chat";
+  localStorage.setItem(LS_MODE, mode);
+  applyMode();
+  const input = $<HTMLTextAreaElement>("#chat-input");
+  const url = e.payload.trim();
+  input.value = [input.value.trim(), url].filter(Boolean).join("\n");
+  input.focus();
+  toast(t("browser.inserted"), "info");
 });
 
 // ---- 协作编程·历史任务 modal: click a snapshot to reload it into the form ----

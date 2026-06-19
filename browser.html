@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Council 浏览器</title>
+    <script type="module" src="/src/browser.ts" defer></script>
+  </head>
+  <body class="browser-body">
+    <div class="browser-shell">
+      <div class="browser-toolbar">
+        <button id="browser-back" class="browser-icon" type="button" title="后退">‹</button>
+        <button id="browser-forward" class="browser-icon" type="button" title="前进">›</button>
+        <button id="browser-reload" class="browser-icon" type="button" title="刷新">↻</button>
+        <form id="browser-form" class="browser-address-form">
+          <input id="browser-url" class="input-box browser-url" placeholder="输入网址或搜索内容" />
+          <button id="browser-go" class="primary" type="submit">打开</button>
+        </form>
+        <button id="browser-copy" class="mini" type="button">复制链接</button>
+        <button id="browser-insert" class="mini" type="button">插入聊天</button>
+        <button id="browser-external" class="mini" type="button">外部打开</button>
+      </div>
+      <div id="browser-status" class="browser-status">准备就绪</div>
+      <div id="browser-view-host" class="browser-view-host"></div>
+    </div>
+  </body>
+</html>

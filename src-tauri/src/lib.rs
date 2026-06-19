@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -235,6 +235,77 @@ async fn fetch_url(url: String) -> Result<String, String> {
         return Err("抓到页面但没解析出正文（可能是纯 JS 渲染的站点）".to_string());
     }
     Ok(text)
+}
+
+fn parse_browser_url(url: &str) -> Result<tauri::Url, String> {
+    let parsed = tauri::Url::parse(url).map_err(|e| e.to_string())?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(parsed),
+        _ => Err("只支持 http / https 地址".to_string()),
+    }
+}
+
+#[tauri::command]
+fn browser_navigate(app: AppHandle, label: String, url: String) -> Result<String, String> {
+    let parsed = parse_browser_url(&url)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("找不到浏览器视图：{label}"))?;
+    webview.navigate(parsed.clone()).map_err(|e| e.to_string())?;
+    Ok(parsed.to_string())
+}
+
+#[tauri::command]
+fn browser_reload(app: AppHandle, label: String) -> Result<(), String> {
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("找不到浏览器视图：{label}"))?;
+    webview.reload().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn browser_history(app: AppHandle, label: String, direction: String) -> Result<(), String> {
+    let script = match direction.as_str() {
+        "back" => "history.back()",
+        "forward" => "history.forward()",
+        _ => return Err("未知浏览器导航方向".to_string()),
+    };
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("找不到浏览器视图：{label}"))?;
+    webview.eval(script).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn browser_url(app: AppHandle, label: String) -> Result<String, String> {
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("找不到浏览器视图：{label}"))?;
+    webview.url().map(|u| u.to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn browser_open_external(url: String) -> Result<(), String> {
+    parse_browser_url(&url)?;
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(&url);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", &url]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 // Text-to-image (Volcengine Ark / Seedream shape, OpenAI-images compatible). Synchronous:
@@ -1579,6 +1650,11 @@ pub fn run() {
             export_image,
             export_video,
             fetch_url,
+            browser_navigate,
+            browser_reload,
+            browser_history,
+            browser_url,
+            browser_open_external,
             image_generate,
             video_generate,
             list_workflows,

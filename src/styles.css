@@ -1378,6 +1378,72 @@ select:focus {
   color: var(--err);
 }
 
+/* 内置浏览器窗口 */
+.browser-body {
+  height: 100vh;
+  overflow: hidden;
+}
+.browser-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg);
+}
+.browser-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.browser-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+.browser-address-form {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  gap: 6px;
+}
+.browser-url {
+  flex: 1;
+  min-width: 120px;
+  height: 30px;
+}
+.browser-address-form button,
+.browser-toolbar > button.mini {
+  flex: none;
+  height: 30px;
+  white-space: nowrap;
+}
+.browser-status {
+  flex: none;
+  height: 24px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-status.error {
+  color: var(--err);
+}
+.browser-view-host {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+
 /* API/HTTP 协作 Agent 卡片（终端区上方，无 PTY 的主写/审查模型） */
 .http-agents {
   display: flex;

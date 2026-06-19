@@ -60,8 +60,12 @@ export const ZH: Record<string, string> = {
   "nav.market": "模型库",
   "nav.settings": "接入",
   "nav.history": "历史",
+  "nav.browser": "浏览器",
   "btn.run": "▶ 运行",
   "btn.stop": "■ 停止",
+  "browser.title": "Council 浏览器",
+  "browser.openFailed": "浏览器打开失败：{msg}",
+  "browser.inserted": "链接已插入聊天输入框",
   // workflow bar
   "wf.label": "工作流",
   "wf.namePh": "给这条工作流起个名",
