@@ -286,17 +286,24 @@ fn browser_url(app: AppHandle, label: String) -> Result<String, String> {
 
 #[tauri::command]
 fn browser_open_external(url: String) -> Result<(), String> {
-    parse_browser_url(&url)?;
+    // Validate (http/https only) and re-serialize through the URL parser so only a well-formed URL
+    // ever reaches the OS opener.
+    let parsed = parse_browser_url(&url)?;
+    let url = parsed.to_string();
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = std::process::Command::new("open");
         c.arg(&url);
         c
     };
+    // NOTE: never route the URL through `cmd /C start` — a valid http(s) URL can contain cmd.exe
+    // metacharacters (& | ^ %), and Rust's Command does not apply cmd-specific escaping, so that
+    // path is a command-injection vector (BatBadBut). explorer.exe takes the URL as a plain argv
+    // arg, opens it in the default browser, and does not parse shell metacharacters.
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", &url]);
+        let mut c = std::process::Command::new("explorer.exe");
+        c.arg(&url);
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
