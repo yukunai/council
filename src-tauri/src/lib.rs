@@ -1153,6 +1153,24 @@ p"#;
     Ok(if path.is_empty() { None } else { Some(path) })
 }
 
+// Pick an image file (e.g. to attach to codex via `-i <path>`). osascript so no
+// dialog-plugin dependency; limited to image types. Returns None if cancelled.
+#[tauri::command]
+fn pick_file() -> Result<Option<String>, String> {
+    let script = r#"set p to ""
+try
+	set p to POSIX path of (choose file with prompt "选择图片" of type {"public.image"})
+end try
+p"#;
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if path.is_empty() { None } else { Some(path) })
+}
+
 // Pick a parent folder + type a name, then create that folder. Returns the new path
 // (None if cancelled). Also via osascript so no dialog-plugin dependency.
 #[tauri::command]
@@ -1653,6 +1671,7 @@ pub fn run() {
             cli_gen_image,
             save_clip_image,
             pick_folder,
+            pick_file,
             new_folder,
             export_image,
             export_video,

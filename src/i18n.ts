@@ -416,6 +416,7 @@ export const ZH: Record<string, string> = {
   "toast.loopStarted": "已开启持续协作：各 Agent 空闲后约每 {mins} 分钟自动巡检/推进一次（顶部「■ 全部停止」或每个标签上的 ■ 可随时停）",
   "term.cwd": "目录",
   "term.pick": "选择",
+  "term.pickImage": "图片",
   "term.args": "参数",
   "term.argsPh": "可选，传给程序的参数",
   "toast.pastedImagePath": "已粘贴图片路径：{name}",

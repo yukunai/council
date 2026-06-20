@@ -4357,6 +4357,7 @@ class Term {
       <div class="launcher">
         <div class="launch-row"><label>${escHtml(t("term.cwd"))}</label><input class="cwd" value="~" /><button class="pick-cwd" type="button">${escHtml(t("term.pick"))}</button></div>
         <div class="launch-row"><label>${escHtml(t("term.args"))}</label><input class="args" placeholder="${escHtml(t("term.argsPh"))}" /></div>
+        <div class="launch-row"><label>${escHtml(t("term.pickImage"))}</label><button class="pick-img" type="button">📷 ${escHtml(t("term.pick"))}</button><span class="img-name"></span><span class="img-hint">codex · -i</span></div>
         <div class="launch-btns">
           <button data-prog="">▶ ${escHtml(t("mode.term"))}</button>
           <button data-prog="claude">▶ Claude</button>
@@ -4372,13 +4373,25 @@ class Term {
       const dir = await invoke<string | null>("pick_folder").catch(() => null);
       if (dir) cwdInput.value = dir;
     });
+    // codex takes images by FILE (`-i <path>`) — terminals can't paste images. Pick one
+    // here; it's prepended as argv on the codex launch so a path with spaces stays intact.
+    let imgPath: string | null = null;
+    const imgName = this.host.querySelector(".img-name") as HTMLElement;
+    this.host.querySelector(".pick-img")!.addEventListener("click", async () => {
+      const f = await invoke<string | null>("pick_file").catch(() => null);
+      if (f) {
+        imgPath = f;
+        imgName.textContent = f.split("/").pop() ?? f;
+      }
+    });
     this.host.querySelectorAll<HTMLButtonElement>(".launch-btns button").forEach((b) =>
       b.addEventListener("click", () => {
         const cwd = cwdInput.value || "~";
         const prog = b.dataset.prog ?? "";
         const argStr = (this.host.querySelector(".args") as HTMLInputElement).value.trim();
         const base = LAUNCH_DEFAULT_ARGS[prog] ?? [];
-        this.launch(prog, [...base, ...(argStr ? argStr.split(/\s+/) : [])], cwd);
+        const img = prog === "codex" && imgPath ? ["-i", imgPath] : [];
+        this.launch(prog, [...base, ...img, ...(argStr ? argStr.split(/\s+/) : [])], cwd);
       }),
     );
   }

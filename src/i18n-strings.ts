@@ -375,6 +375,7 @@ export const STRINGS: Record<string, Record<string, string>> = {
     "toast.loopStarted": "Continuous collaboration started: each Agent auto-patrols/advances about every {mins} min once idle (\"■ Stop all\" at the top or the ■ on each tab can stop it anytime)",
     "term.cwd": "Directory",
     "term.pick": "Select",
+    "term.pickImage": "Image",
     "term.args": "Arguments",
     "term.argsPh": "Optional, arguments passed to the program",
     "toast.pastedImagePath": "Pasted image path: {name}",
