@@ -686,7 +686,9 @@ const CLI_LAUNCH: Record<string, CliLaunch> = {
   claude: { auto: ["--dangerously-skip-permissions"], promptArg: true, accept: "\x1b[B\r" },
   codex: { auto: ["--dangerously-bypass-approvals-and-sandbox"], promptArg: true },
   gemini: { auto: ["--yolo"], promptArg: true },
-  grok: { auto: ["--always-approve"], promptArg: false },
+  // grok takes the task as a positional prompt (`grok "<task>"`), which is far more
+  // reliable than typing it into stdin after launch — so pass it as an arg.
+  grok: { auto: ["--always-approve"], promptArg: true },
   "cursor-agent": { auto: ["--force"], promptArg: true },
 };
 // Baseline args when launching a CLI interactively from the 终端 launcher (whatever the
@@ -4230,13 +4232,16 @@ async function runCoding() {
     paneIdx++;
     const spec = CLI_LAUNCH[program];
     const auto = code.auto && spec ? spec.auto : [];
+    // gemini hangs on a "trust this folder?" gate without --skip-trust, regardless of the
+    // auto-approve toggle, so always fold in its launch defaults (LAUNCH_DEFAULT_ARGS) here too.
+    const flags = [...(LAUNCH_DEFAULT_ARGS[program] ?? []), ...auto];
     // Only auto-confirm the startup dialog when its triggering flag (auto) is on.
     const accept = code.auto ? spec?.accept : undefined;
     if (spec && !spec.promptArg) {
-      // CLI won't take a positional prompt (grok) — launch bare + type it into stdin.
-      pane.active!.launch(program, auto, dir, prompt, accept);
+      // CLI won't take a positional prompt — launch bare + type it into stdin.
+      pane.active!.launch(program, flags, dir, prompt, accept);
     } else {
-      pane.active!.launch(program, [...auto, prompt], dir, undefined, accept);
+      pane.active!.launch(program, [...flags, prompt], dir, undefined, accept);
     }
 
     // 持续协作: re-prompt this agent to re-scan the project + TEAM_NOTES.md, so the team keeps
